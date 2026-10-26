@@ -24,10 +24,20 @@ const DATA_FILE = process.env.DATA_FILE || join(ROOT, 'data', 'desk.json');
 const DEFAULT_OWNER_PASSWORD = 'owner123';
 const OWNER_PASSWORD = process.env.OWNER_PASSWORD || '';
 
+const DEFAULT_DRIVERS = [
+  { name: 'alai', pin: '1215', taxiId: 'SIM-001' },
+  { name: 'alai01', pin: '1215', taxiId: 'SIM-002' },
+];
+
 const fleet = createFleet();
 const desk = createDesk({ file: DATA_FILE });
 const ownerPassword = OWNER_PASSWORD || DEFAULT_OWNER_PASSWORD;
 await desk.setOwnerPassword(ownerPassword);
+for (const d of DEFAULT_DRIVERS) {
+  if (!desk.listDrivers().some((x) => x.name.toLowerCase() === d.name.toLowerCase())) {
+    await desk.addDriver(d);
+  }
+}
 const sim = SIM_COUNT > 0 ? startSimulator(fleet, { count: SIM_COUNT, center: CENTER }) : null;
 const stats = createStats(fleet);
 stats.sample();
