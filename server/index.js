@@ -431,7 +431,11 @@ function serveStatic(res, pathname) {
     res.writeHead(404, { 'content-type': 'text/plain' });
     return res.end('not found');
   }
-  res.writeHead(200, { 'content-type': MIME[extname(file)] || 'application/octet-stream' });
+  const ext = extname(file);
+  res.writeHead(200, {
+    'content-type': MIME[ext] || 'application/octet-stream',
+    'cache-control': ext === '.html' ? 'no-cache, no-store, must-revalidate' : 'public, max-age=3600',
+  });
   res.end(readFileSync(file));
 }
 
