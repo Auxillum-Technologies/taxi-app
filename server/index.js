@@ -43,6 +43,26 @@ const stats = createStats(fleet);
 stats.sample();
 const sampler = setInterval(() => stats.sample(), STATS.sampleMs);
 
+// Keeps actively-sharing driver phones alive on the map while the phone screen sleeps.
+const activePhones = new Map(); // taxiId -> { lat, lng, heading, onTrip, updatedAt }
+const phoneKeepAlive = setInterval(() => {
+  const now = Date.now();
+  for (const [taxiId, state] of activePhones) {
+    if (now - state.updatedAt > LIMITS.forgetMs) {
+      activePhones.delete(taxiId);
+      continue;
+    }
+    const last = fleet.get(taxiId);
+    if (!last || now - last.ts >= 20_000) {
+      fleet.ingest(
+        { vehicleId: taxiId, lat: state.lat, lng: state.lng, speed: 0, heading: state.heading, onTrip: state.onTrip, ts: now },
+        'driver-phone',
+        now,
+      );
+    }
+  }
+}, 15_000);
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -214,6 +234,8 @@ async function driverLogin(req, res) {
 }
 
 function driverLogout(req, res) {
+  const d = desk.driverFor(bearer(req));
+  if (d) activePhones.delete(d.taxiId);
   desk.closeSession(bearer(req));
   send(res, 200, { ok: true });
 }
@@ -236,11 +258,22 @@ async function driverPing(req, res) {
   const b = await readBody(req, res);
   if (!b) return;
   if (typeof b !== 'object' || Array.isArray(b)) return send(res, 400, { error: 'body must be a JSON object' });
+  if (b.sharing === false) {
+    activePhones.delete(d.taxiId);
+    return send(res, 202, { accepted: true, sharing: false });
+  }
   const now = Date.now();
   const prev = fleet.get(d.taxiId);
   const ts = typeof b.ts === 'number' && (!prev || b.ts >= prev.ts) ? b.ts : now;
   const result = fleet.ingest({ ...b, ts, vehicleId: d.taxiId }, 'driver-phone', now);
   if (!result.ok) return send(res, 400, { error: result.error });
+  activePhones.set(d.taxiId, {
+    lat: result.value.lat,
+    lng: result.value.lng,
+    heading: result.value.heading,
+    onTrip: result.value.onTrip,
+    updatedAt: now,
+  });
   stats.sample(now);
   send(res, 202, { accepted: true, stale: Boolean(result.stale) });
 }
@@ -450,6 +483,7 @@ server.listen(PORT, () => {
 function shutdown() {
   sim?.stop();
   clearInterval(sampler);
+  clearInterval(phoneKeepAlive);
   desk.flush();
   server.close();
   process.exit(0);

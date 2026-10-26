@@ -172,6 +172,9 @@
       let driver = null;
       let watchId = null;
       let heartbeatTimer = null;
+      let wakeLock = null;
+      let audioCtx = null;
+      let webLockRelease = null;
       let lastPos = null;
       let lastSent = 0;
       let refreshTimer = null;
@@ -194,6 +197,7 @@
           method: opts.method || 'GET',
           headers,
           body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+          keepalive: Boolean(opts.keepalive),
         });
         const data = await res.json().catch(() => ({}));
         if (res.status === 401 && token) signedOut();
@@ -320,6 +324,54 @@
         $('status').className = 'status ' + (cls || '');
       }
 
+      // ---------- wake lock & background keep-alive ----------
+
+      async function holdWakeLock() {
+        if (watchId === null) return;
+        try {
+          if ('wakeLock' in navigator && !wakeLock) {
+            wakeLock = await navigator.wakeLock.request('screen');
+            wakeLock.addEventListener('release', () => { wakeLock = null; });
+          }
+        } catch { /* wake lock not permitted yet */ }
+        try {
+          if (!audioCtx) {
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (Ctx) {
+              audioCtx = new Ctx();
+              const osc = audioCtx.createOscillator();
+              const gain = audioCtx.createGain();
+              gain.gain.value = 0.00001; // inaudible keep-alive for mobile background timers
+              osc.connect(gain);
+              gain.connect(audioCtx.destination);
+              osc.start();
+            }
+          } else if (audioCtx.state === 'suspended') {
+            audioCtx.resume().catch(() => {});
+          }
+        } catch { /* audio keep-alive optional */ }
+        try {
+          if (navigator.locks && !webLockRelease) {
+            navigator.locks.request('taxi-driver-sharing', () => new Promise((r) => { webLockRelease = r; })).catch(() => {});
+          }
+        } catch { /* web locks optional */ }
+      }
+
+      function releaseWakeLock() {
+        if (wakeLock) {
+          wakeLock.release().catch(() => {});
+          wakeLock = null;
+        }
+        if (audioCtx) {
+          audioCtx.close().catch(() => {});
+          audioCtx = null;
+        }
+        if (webLockRelease) {
+          webLockRelease();
+          webLockRelease = null;
+        }
+      }
+
       function sendPosition(pos, force = false) {
         lastPos = pos;
         const now = Date.now();
@@ -332,9 +384,10 @@
           speed: c.speed == null || Number.isNaN(c.speed) ? 0 : Math.max(0, c.speed * 3.6),
           heading: c.heading == null || Number.isNaN(c.heading) ? 0 : ((c.heading % 360) + 360) % 360,
           onTrip: $('trip').checked,
+          sharing: true,
           ts: now,
         };
-        api('/api/driver/ping', { method: 'POST', body })
+        api('/api/driver/ping', { method: 'POST', body, keepalive: true })
           .then((res) => {
             if (res.ok) {
               say(`Sending. Last update ${new Date(now).toLocaleTimeString()} · ${Math.round(body.speed)} km/h`, 'ok');
@@ -346,11 +399,15 @@
           .catch(() => say('No connection. Will keep trying with each new GPS fix.', 'err'));
       }
 
-      function stopSharing() {
+      function stopSharing(notifyServer = true) {
         if (watchId !== null) navigator.geolocation.clearWatch(watchId);
         watchId = null;
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
+        releaseWakeLock();
+        if (notifyServer && token) {
+          api('/api/driver/ping', { method: 'POST', body: { sharing: false }, keepalive: true }).catch(() => {});
+        }
         $('go').textContent = 'Start sharing';
         $('go').setAttribute('aria-pressed', 'false');
         say('Not sharing.');
@@ -363,6 +420,7 @@
         $('go').textContent = 'Stop sharing';
         $('go').setAttribute('aria-pressed', 'true');
         say('Waiting for GPS…');
+        holdWakeLock();
         watchId = navigator.geolocation.watchPosition(
           (pos) => sendPosition(pos, false),
           (err) => say(`Location error: ${err.message}. Check the browser's location permission.`, 'err'),
@@ -370,11 +428,34 @@
         );
         clearInterval(heartbeatTimer);
         heartbeatTimer = setInterval(() => {
-          if (watchId !== null && lastPos) sendPosition(lastPos, true);
+          if (watchId === null) return;
+          navigator.geolocation.getCurrentPosition(
+            (pos) => sendPosition(pos, true),
+            () => { if (lastPos) sendPosition(lastPos, true); },
+            { enableHighAccuracy: true, maximumAge: 5000, timeout: 8000 },
+          );
         }, 10000);
       }
 
+      document.addEventListener('visibilitychange', () => {
+        if (watchId === null) return;
+        if (document.visibilityState === 'visible') {
+          holdWakeLock();
+          navigator.geolocation.getCurrentPosition(
+            (pos) => sendPosition(pos, true),
+            () => { if (lastPos) sendPosition(lastPos, true); },
+            { enableHighAccuracy: true, maximumAge: 2000, timeout: 8000 },
+          );
+        } else if (lastPos) {
+          sendPosition(lastPos, true);
+        }
+      });
+
+      document.addEventListener('touchstart', () => { if (watchId !== null) holdWakeLock(); }, { passive: true });
+      document.addEventListener('click', () => { if (watchId !== null) holdWakeLock(); }, { passive: true });
+
       $('trip').addEventListener('change', () => {
+        holdWakeLock();
         if (lastPos) sendPosition(lastPos, true);
       });
 
