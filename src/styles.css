@@ -348,6 +348,25 @@ input[type="search"]::placeholder {
   flex-direction: column;
   gap: 10px;
 }
+.vehicle-list-head {
+  display: none;
+}
+.vehicle-list-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+.vehicle-list-content[hidden] {
+  display: none;
+}
+.vehicle-list-content > * {
+  flex: none;
+}
+.vehicle-list-content > .vehicles {
+  flex: 1 1 auto;
+}
 
 .chips {
   display: flex;
@@ -1099,6 +1118,11 @@ input[type="search"]::placeholder {
   min-height: 1.4em;
   margin: 4px 0 0;
 }
+.signin-countdown {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
 @keyframes form-in {
   from {
     opacity: 0;
@@ -1234,6 +1258,25 @@ input[type="search"]::placeholder {
     width: auto;
     max-height: 40vh;
     padding: 10px;
+  }
+  .vehicle-list-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 40px;
+  }
+  .vehicle-list-toggle {
+    min-height: 36px;
+    padding: 0 10px;
+    font-size: var(--fs-xs);
+  }
+  .vehicle-list-content {
+    flex: 1 1 auto;
+  }
+  .side.list-collapsed {
+    max-height: none;
+    padding: 6px 10px;
   }
   .chips {
     flex-wrap: nowrap;

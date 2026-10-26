@@ -284,7 +284,10 @@ function clientKey(req) {
 
 // Sends a desk result: error with its status, or success with `pick(value)`.
 function sendResult(res, result, status = 200, pick = (v) => v) {
-  if (!result.ok) return send(res, result.status || 400, { error: result.error });
+  if (!result.ok) {
+    if (result.retryAfter) res.setHeader('retry-after', String(result.retryAfter));
+    return send(res, result.status || 400, { error: result.error, ...(result.retryAfter ? { retryAfter: result.retryAfter } : {}) });
+  }
   send(res, status, pick(result.value));
 }
 

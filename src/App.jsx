@@ -46,6 +46,7 @@ export default function App({ token, onSignOut }) {
   const [selectedReportId, setSelectedReportId] = useState(null);
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
+  const [vehicleListOpen, setVehicleListOpen] = useState(() => !window.matchMedia('(max-width: 760px)').matches);
   const [replayMin, setReplayMin] = useState(0); // 0 = live
   const [replayVehicles, setReplayVehicles] = useState([]);
   const [replayError, setReplayError] = useState(false);
@@ -344,7 +345,20 @@ export default function App({ token, onSignOut }) {
       </header>
 
       <div ref={hudRef} className="hud" id="panel-map" role="tabpanel" aria-labelledby="tab-map" hidden={view !== 'map'}>
-        <aside className="panel side" aria-label="Vehicle list">
+        <aside className={`panel side${vehicleListOpen ? '' : ' list-collapsed'}`} aria-label="Vehicle list">
+          <div className="vehicle-list-head">
+            <strong>Vehicles <span className="muted">({listed.length})</span></strong>
+            <button
+              type="button"
+              className="ghost vehicle-list-toggle"
+              aria-expanded={vehicleListOpen}
+              aria-controls="vehicle-list-content"
+              onClick={() => setVehicleListOpen((open) => !open)}
+            >
+              {vehicleListOpen ? 'Hide list' : 'Show list'}
+            </button>
+          </div>
+          <div className="vehicle-list-content" id="vehicle-list-content" hidden={!vehicleListOpen}>
           <label className="table-search">
             <Icon name="search" size={18} />
             <span className="sr-only">Search vehicle ID</span>
@@ -381,6 +395,7 @@ export default function App({ token, onSignOut }) {
             ))}
             {listed.length === 0 && <li className="muted empty">No vehicles match.</li>}
           </ul>
+          </div>
         </aside>
 
         {selected && (

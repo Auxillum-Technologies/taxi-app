@@ -17,11 +17,36 @@ export default function SignIn({ onOwnerToken, notice: initialNotice = '' }) {
   const [notice, setNotice] = useState(initialNotice);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [lockedUntil, setLockedUntil] = useState(0); // ms timestamp; the server sets it after too many failed sign-ins
+  const [now, setNow] = useState(() => Date.now());
   const firstField = useRef(null);
+  const waitSeconds = lockedUntil ? Math.max(0, Math.ceil((lockedUntil - now) / 1000)) : 0;
 
   useEffect(() => {
     firstField.current?.focus();
   }, [role]);
+
+  // Ticks once a second while locked; when the wait ends the form opens again.
+  useEffect(() => {
+    if (!lockedUntil) return;
+    const id = setInterval(() => {
+      const t = Date.now();
+      setNow(t);
+      if (t >= lockedUntil) {
+        setLockedUntil(0);
+        setError('');
+        clearInterval(id);
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, [lockedUntil]);
+
+  function lockOut(res) {
+    const seconds = Number(res.data.retryAfter) || 900;
+    setNow(Date.now());
+    setLockedUntil(Date.now() + seconds * 1000);
+    setError(sentence(res.data.error) || 'Too many failed sign-ins.');
+  }
 
   function pick(next) {
     setRole(next);
@@ -42,6 +67,7 @@ export default function SignIn({ onOwnerToken, notice: initialNotice = '' }) {
       if (role === 'owner') {
         const res = await api('/api/owner/login', { method: 'POST', body: { password: form.get('password') } });
         if (res.ok) return onOwnerToken(res.data.token);
+        if (res.status === 429) return lockOut(res);
         setError(res.status === 401 ? 'That password is not right.' : sentence(res.data.error) || 'Sign-in failed.');
       } else {
         const res = await api('/api/driver/login', { method: 'POST', body: { name: form.get('name'), pin: form.get('pin') } });
@@ -50,6 +76,7 @@ export default function SignIn({ onOwnerToken, notice: initialNotice = '' }) {
           window.location.assign('/driver.html');
           return;
         }
+        if (res.status === 429) return lockOut(res);
         setError(res.status === 401 ? 'That name and PIN do not match. Use your name exactly as the owner registered it.' : sentence(res.data.error) || 'Sign-in failed.');
       }
     } catch {
@@ -130,16 +157,26 @@ export default function SignIn({ onOwnerToken, notice: initialNotice = '' }) {
             </>
           )}
 
-          <button type="submit" className="primary signin-submit" disabled={busy}>
-            {busy ? 'Signing in…' : role === 'owner' ? 'Open the fleet console' : 'Open my page'}
+          <button type="submit" className="primary signin-submit" disabled={busy || waitSeconds > 0}>
+            {busy ? 'Signing in…' : waitSeconds > 0 ? 'Wait before trying again' : role === 'owner' ? 'Open the fleet console' : 'Open my page'}
           </button>
           <p className="alert-text small signin-error" role="alert">
             {error}
           </p>
+          {waitSeconds > 0 && (
+            <p className="signin-countdown small" aria-live="off">
+              You can try again in <time>{formatWait(waitSeconds)}</time>.
+            </p>
+          )}
         </form>
       </section>
     </main>
   );
+}
+
+// 754 -> "12:34". Minutes are not padded, so a 15-minute lock reads "15:00".
+export function formatWait(seconds) {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
 // Server errors are lower-case fragments; show them as sentences.

@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "drivers": [
+    {
+      "id": "a36da03c-00a7-4a69-a93c-9c8debc7dc0f",
+      "name": "alai",
+      "taxiId": "SIM-001",
+      "taxi": {
+        "plate": "",
+        "model": "",
+        "bodyNumber": "",
+        "franchiseNo": "",
+        "franchiseExpiry": ""
+      },
+      "pinHash": "scrypt$286842bc8a6d1291981ba6bd963f9052$c675e7495342abf630afbc746b99a46d0f80d7a9462391e6d3a83ab52dee6ce69145b2dfe449eff0649fb0cddeabcf685bdac96f2c6ec1eb632e4db8b951b9ee",
+      "createdAt": 1792991023597
+    },
+    {
+      "id": "000c9b2f-57e3-4dd2-884e-da4e627d7b08",
+      "name": "alai01",
+      "taxiId": "SIM-002",
+      "taxi": {
+        "plate": "",
+        "model": "",
+        "bodyNumber": "",
+        "franchiseNo": "",
+        "franchiseExpiry": ""
+      },
+      "pinHash": "scrypt$82b4a25273b6003c00db0a19486a06e4$2b2b159df1ea80106ef134ee49294559c208fa1628d8067506c852ce885f6310efa3bfcfcbbf66744a3bbf8bf662ae679a478c51d326d07bfff17af45da542c4",
+      "createdAt": 1793000347369
+    }
+  ],
+  "messages": [],
+  "reports": []
+}

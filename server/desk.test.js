@@ -155,6 +155,10 @@ test('repeated wrong passwords from one address are throttled', async () => {
   }
   const blocked = await desk.ownerLogin({ password: 'owner-secret-1', key: 'attacker' });
   assert.equal(blocked.status, 429);
+  assert.equal(blocked.retryAfter, DESK_LIMITS.loginWindowMs / 1000);
+  c.tick(60_000);
+  const later = await desk.ownerLogin({ password: 'owner-secret-1', key: 'attacker' });
+  assert.equal(later.retryAfter, DESK_LIMITS.loginWindowMs / 1000 - 60);
   // Another address is unaffected.
   assert.equal((await desk.ownerLogin({ password: 'owner-secret-1', key: 'office' })).ok, true);
   // The window expires.

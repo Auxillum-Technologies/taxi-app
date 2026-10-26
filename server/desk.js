@@ -32,7 +32,7 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
 // Taxi details the owner records: field -> max length. All optional, filled in when known.
 export const TAXI_FIELDS = { plate: 16, model: 40, bodyNumber: 16, franchiseNo: 40, franchiseExpiry: 10 };
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
-const fail = (error, status = 400) => ({ ok: false, error, status });
+const fail = (error, status = 400, extra = {}) => ({ ok: false, error, status, ...extra });
 const ok = (value) => ({ ok: true, value });
 
 // Unknown names still pay the cost of a real check, so timing does not reveal accounts.
@@ -143,14 +143,15 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS }
 
   // ---------- sign-in and sessions ----------
 
-  function throttled(key, map = failures, max = limits.loginMaxFailures) {
+  // Milliseconds until a locked key may try again; 0 when it is not locked.
+  function lockedMs(key, map = failures, max = limits.loginMaxFailures) {
     const f = map.get(key);
-    if (!f) return false;
+    if (!f) return 0;
     if (now() - f.since > limits.loginWindowMs) {
       map.delete(key);
-      return false;
+      return 0;
     }
-    return f.count >= max;
+    return f.count >= max ? f.since + limits.loginWindowMs - now() : 0;
   }
 
   function recordFailure(key, map = failures) {
@@ -194,7 +195,8 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS }
   }
 
   async function ownerLogin({ password, key }) {
-    if (throttled(key)) return fail('too many failed sign-ins; wait 15 minutes', 429);
+    const wait = lockedMs(key);
+    if (wait > 0) return lockedOut(wait);
     const good = typeof password === 'string' && ownerHash !== null && (await verifyPassword(password, ownerHash));
     if (!good) {
       recordFailure(key);
@@ -204,13 +206,18 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS }
     return ok({ token: openSession({ role: 'owner' }), expiresInMs: limits.sessionMs });
   }
 
+  // 429 with the time left in seconds, for the countdown on the sign-in screen.
+  function lockedOut(waitMs, error = 'too many failed sign-ins') {
+    const retryAfter = Math.ceil(waitMs / 1000);
+    return fail(error, 429, { retryAfter });
+  }
+
   // Name + PIN. Wrong PINs count against the address and against the name, so one
   // driver's PIN cannot be guessed from many addresses either.
   async function driverLogin({ name, pin, key }) {
     const nk = nameKey(name);
-    if (throttled(key) || throttled(nk, nameFailures, limits.nameMaxFailures)) {
-      return fail('too many wrong PINs; wait 15 minutes or ask the owner', 429);
-    }
+    const wait = Math.max(lockedMs(key), lockedMs(nk, nameFailures, limits.nameMaxFailures));
+    if (wait > 0) return lockedOut(wait, 'too many wrong PINs; ask the owner for help or wait');
     const driver = nk ? [...drivers.values()].find((d) => nameKey(d.name) === nk) : null;
     const hash = driver?.pinHash || (await DECOY_HASH); // a driver without a PIN yet cannot sign in
     const good = typeof pin === 'string' && PIN.test(pin) && (await verifyPassword(pin, hash)) && Boolean(driver?.pinHash);
