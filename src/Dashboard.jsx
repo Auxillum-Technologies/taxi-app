@@ -71,9 +71,73 @@ function Kpi({ label, value, decimals = 0, suffix = '', sub, tone }) {
   );
 }
 
+const OWNER_TRIPS_KEY = 'taxi.ownerTrips';
+
+function readLocalTrips() {
+  try {
+    return JSON.parse(localStorage.getItem(OWNER_TRIPS_KEY) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalTrips(list) {
+  try {
+    localStorage.setItem(OWNER_TRIPS_KEY, JSON.stringify(list.slice(0, 500)));
+  } catch {
+    /* ignore storage limits */
+  }
+}
+
+function formatDuration(sec) {
+  const s = Math.max(0, Math.round(sec || 0));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}m ${String(r).padStart(2, '0')}s`;
+}
+
 export default function Dashboard({ stats, reports, connected, onLocateVehicle, onLocatePoint }) {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState({ key: 'status', dir: 1 });
+  const [savedTrips, setSavedTrips] = useState(readLocalTrips);
+  const activeStartRef = useRef(new Map()); // vehicleId -> { startedAt, startKm }
+
+  useEffect(() => {
+    if (!stats) return;
+    let changed = false;
+    const byId = new Map(savedTrips.map((t) => [t.id, t]));
+    if (Array.isArray(stats.trips)) {
+      for (const tr of stats.trips) {
+        if (!byId.has(tr.id)) {
+          byId.set(tr.id, tr);
+          changed = true;
+        }
+      }
+    }
+    const active = activeStartRef.current;
+    for (const v of stats.vehicles || []) {
+      const prev = active.get(v.id);
+      if (v.status === 'on_trip' && !prev) {
+        active.set(v.id, { startedAt: Date.now(), startKm: v.distanceKm || 0 });
+      } else if (v.status === 'free' && prev) {
+        active.delete(v.id);
+        const endedAt = Date.now();
+        const already = [...byId.values()].some((t) => t.taxiId === v.id && Math.abs((t.endedAt || 0) - endedAt) < 15_000);
+        if (!already && v.source === 'driver-phone') {
+          const durationSec = Math.max(1, Math.round((endedAt - prev.startedAt) / 1000));
+          const distanceKm = Math.max(0, Math.round(((v.distanceKm || 0) - prev.startKm) * 100) / 100);
+          const id = `${v.id}-${endedAt}`;
+          byId.set(id, { id, taxiId: v.id, driverName: v.id, startedAt: prev.startedAt, endedAt, durationSec, distanceKm, at: endedAt });
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      const merged = [...byId.values()].sort((a, b) => (b.endedAt || 0) - (a.endedAt || 0)).slice(0, 500);
+      writeLocalTrips(merged);
+      setSavedTrips(merged);
+    }
+  }, [stats, savedTrips]);
 
   const rows = useMemo(() => {
     if (!stats) return [];
@@ -277,6 +341,46 @@ export default function Dashboard({ stats, reports, connected, onLocateVehicle, 
           </table>
         </div>
         <p className="muted small">Distance, trips and stopped time cover data received since the server started.</p>
+      </section>
+
+      <section className="dash-card dash-table" aria-labelledby="trips-h">
+        <div className="card-title-row">
+          <h3 id="trips-h">Passenger trips ({savedTrips.length})</h3>
+          <span className="muted small">
+            Total: {savedTrips.reduce((s, t) => s + Number(t.distanceKm || 0), 0).toFixed(2)} km ·{' '}
+            {formatDuration(savedTrips.reduce((s, t) => s + Number(t.durationSec || 0), 0))} · saved locally
+          </span>
+        </div>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Taxi</th>
+                <th scope="col">Driver</th>
+                <th scope="col">Drop-off</th>
+                <th scope="col" className="num">Duration</th>
+                <th scope="col" className="num">Distance (km)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {savedTrips.slice(0, 100).map((t) => (
+                <tr key={t.id}>
+                  <th scope="row" className="taxi-id">{t.taxiId}</th>
+                  <td>{t.driverName || '–'}</td>
+                  <td>{clock(t.endedAt || t.at)}</td>
+                  <td className="num">{formatDuration(t.durationSec)}</td>
+                  <td className="num">{Number(t.distanceKm || 0).toFixed(2)} km</td>
+                </tr>
+              ))}
+              {savedTrips.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="muted">No passenger drop-offs recorded yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <p className="muted small">Recorded when a driver taps Passenger drop off. Saved locally in this browser and on the server.</p>
       </section>
     </main>
   );

@@ -18,6 +18,7 @@ export const DESK_LIMITS = {
   maxMessageLen: 1000,
   maxMessages: 1000,
   maxReports: 500,
+  maxTrips: 1000,
   reportCooldownMs: 5_000, // one driver, one report per 5 s
   fallbackFixMs: 10 * 60_000, // last GPS ping counts as a location only this recent
   loginWindowMs: 15 * 60_000,
@@ -97,6 +98,7 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS }
   const drivers = new Map(); // id -> record incl. pinHash (never sent to clients)
   const messages = []; // { id, to: driverId | 'all', text, at, readBy: [driverId] }
   const reports = []; // { id, driverId, driverName, taxiId, type, text, lat, lng, status, at, updatedAt }
+  const trips = []; // { id, driverId, driverName, taxiId, startedAt, endedAt, durationSec, distanceKm, at }
   const sessions = new Map(); // token -> { role, driverId?, expires }
   const failures = new Map(); // client key -> { count, since }
   const nameFailures = new Map(); // nameKey -> { count, since }
@@ -119,13 +121,14 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS }
     for (const d of data.drivers ?? []) drivers.set(d.id, d);
     messages.push(...(data.messages ?? []));
     reports.push(...(data.reports ?? []));
+    trips.push(...(data.trips ?? []));
   }
 
   function save() {
     if (!file) return;
     mkdirSync(dirname(file), { recursive: true });
     const tmp = `${file}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ version: 1, drivers: [...drivers.values()], messages, reports }, null, 2));
+    writeFileSync(tmp, JSON.stringify({ version: 1, drivers: [...drivers.values()], messages, reports, trips }, null, 2));
     renameSync(tmp, file);
   }
 
@@ -426,6 +429,39 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS }
     return reports.slice(-200).reverse();
   }
 
+  // ---------- passenger trips ----------
+
+  function addTrip(driver, input = {}) {
+    const t = now();
+    const durationSec = isNum(input.durationSec) && input.durationSec >= 0 ? Math.round(input.durationSec) : 0;
+    const distanceKm = isNum(input.distanceKm) && input.distanceKm >= 0 ? Math.round(input.distanceKm * 100) / 100 : 0;
+    const endedAt = isNum(input.endedAt) ? input.endedAt : t;
+    const startedAt = isNum(input.startedAt) ? input.startedAt : endedAt - durationSec * 1000;
+    const trip = {
+      id: randomUUID(),
+      driverId: driver.id,
+      driverName: driver.name,
+      taxiId: driver.taxiId,
+      startedAt,
+      endedAt,
+      durationSec,
+      distanceKm,
+      at: t,
+    };
+    trips.push(trip);
+    while (trips.length > (limits.maxTrips ?? 1000)) trips.shift();
+    changed();
+    return ok(trip);
+  }
+
+  function listTrips() {
+    return trips.slice(-200).reverse();
+  }
+
+  function driverTrips(driverId) {
+    return trips.filter((x) => x.driverId === driverId).slice(-50).reverse();
+  }
+
   load();
 
   return {
@@ -447,6 +483,9 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS }
     setReportStatus,
     publicReports,
     ownerReports,
+    addTrip,
+    listTrips,
+    driverTrips,
     flush,
     get version() {
       return version;

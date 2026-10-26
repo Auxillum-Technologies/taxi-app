@@ -72,7 +72,31 @@
         font-size: 1.05rem;
       }
       button.primary[aria-pressed="true"] { background: #dcefe2; color: var(--text); }
+      button.primary.dropoff { background: #d97706; color: #ffffff; }
       button.ghost { min-height: 44px; background: transparent; }
+      table.data-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 12px;
+        font-size: 0.88rem;
+        font-variant-numeric: tabular-nums;
+      }
+      table.data-table th,
+      table.data-table td {
+        padding: 8px 6px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+      }
+      table.data-table th {
+        color: var(--muted);
+        font-weight: 600;
+        font-size: 0.78rem;
+        text-transform: uppercase;
+      }
+      table.data-table td.num,
+      table.data-table th.num {
+        text-align: right;
+      }
       .status { margin-top: 12px; font-variant-numeric: tabular-nums; min-height: 1.4em; }
       .err { color: var(--bad); }
       .ok { color: var(--ok); }
@@ -148,12 +172,52 @@
         </section>
 
         <section aria-labelledby="share-h">
-          <h2 id="share-h">Location</h2>
-          <p>Keep this page open while you drive. Your phone sends its GPS position to the fleet monitor.
-            Browsers only allow location on an <strong>https</strong> page (or localhost).</p>
-          <label class="check"><input id="trip" type="checkbox" /> I have a passenger on board</label>
-          <button id="go" class="primary" type="button" aria-pressed="false">Start sharing</button>
+          <h2 id="share-h">Share location</h2>
+          <p>Keep this page open while you drive. Your phone sends its GPS position to the fleet monitor.</p>
+          <button id="go" class="primary" type="button" aria-pressed="false">Start sharing location</button>
           <div id="status" class="status" role="status" aria-live="polite">Not sharing.</div>
+          <table class="data-table" aria-label="Location sharing status">
+            <thead>
+              <tr>
+                <th scope="col">State</th>
+                <th scope="col">Coordinates</th>
+                <th scope="col" class="num">Speed</th>
+                <th scope="col" class="num">Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td id="locState">Stopped</td>
+                <td id="locCoords">–</td>
+                <td id="locSpeed" class="num">0 km/h</td>
+                <td id="locTime" class="num">–</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section aria-labelledby="passenger-h">
+          <h2 id="passenger-h">Passenger trip</h2>
+          <p>Tap when a passenger boards, then tap drop off to measure trip distance (km) and time.</p>
+          <button id="passengerBtn" class="primary" type="button" aria-pressed="false">I have a passenger</button>
+          <dl class="tiles" id="tripMeter" style="margin-top: 12px;">
+            <div><dt>Trip status</dt><dd id="mState">Waiting</dd></div>
+            <div><dt>Elapsed time</dt><dd id="mTime">00:00</dd></div>
+            <div><dt>Distance</dt><dd id="mDist">0.00 km</dd></div>
+            <div><dt>Completed trips</dt><dd id="mCount">0</dd></div>
+          </dl>
+          <table class="data-table" aria-label="Passenger trips">
+            <thead>
+              <tr>
+                <th scope="col">Drop-off</th>
+                <th scope="col" class="num">Time</th>
+                <th scope="col" class="num">Distance</th>
+              </tr>
+            </thead>
+            <tbody id="tripRows">
+              <tr><td colspan="3" class="muted">No passenger trips recorded yet.</td></tr>
+            </tbody>
+          </table>
         </section>
       </div>
     </main>
@@ -178,6 +242,14 @@
       let lastPos = null;
       let lastSent = 0;
       let refreshTimer = null;
+      const TRIPS_KEY = 'taxi.driverTrips';
+      let onTrip = false;
+      let tripStartMs = 0;
+      let tripKm = 0;
+      let tripLastCoord = null;
+      let tripTickTimer = null;
+      let tripList = [];
+      try { tripList = JSON.parse(readStore(TRIPS_KEY) || '[]'); } catch { tripList = []; }
 
       function readStore(key) {
         try { return localStorage.getItem(key) || ''; } catch { return ''; }
@@ -277,6 +349,13 @@
         $('lDist').textContent = `${live.distanceKm.toFixed(1)} km`;
         $('lTrips').textContent = String(live.trips);
         $('lNote').textContent = `Last position ${new Date(live.ts).toLocaleTimeString()}. Trips count from when the fleet server last started.`;
+        if (Array.isArray(data.trips) && data.trips.length) {
+          const byId = new Map(tripList.map((x) => [x.id, x]));
+          for (const tr of data.trips) byId.set(tr.id, tr);
+          tripList = [...byId.values()].sort((a, b) => (b.endedAt || 0) - (a.endedAt || 0)).slice(0, 50);
+          writeStore(TRIPS_KEY, JSON.stringify(tripList));
+          renderTrips();
+        }
       }
 
       async function loadMe() {
@@ -372,31 +451,104 @@
         }
       }
 
-      function sendPosition(pos, force = false) {
-        lastPos = pos;
+      function haversineKm(a, b) {
+        const rad = Math.PI / 180;
+        const dLat = (b.lat - a.lat) * rad;
+        const dLng = (b.lng - a.lng) * rad;
+        const s = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+        return 2 * 6371 * Math.asin(Math.sqrt(s));
+      }
+
+      function fmtDuration(sec) {
+        const s = Math.max(0, Math.round(sec));
+        const m = Math.floor(s / 60);
+        const r = s % 60;
+        return `${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
+      }
+
+      function renderTrips() {
+        $('mCount').textContent = String(tripList.length);
+        const tbody = $('tripRows');
+        tbody.replaceChildren();
+        if (!tripList.length) {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 3;
+          td.className = 'muted';
+          td.textContent = 'No passenger trips recorded yet.';
+          tr.append(td);
+          tbody.append(tr);
+          return;
+        }
+        for (const t of tripList.slice(0, 20)) {
+          const tr = document.createElement('tr');
+          const tdAt = document.createElement('td');
+          tdAt.textContent = new Date(t.endedAt || Date.now()).toLocaleTimeString();
+          const tdDur = document.createElement('td');
+          tdDur.className = 'num';
+          tdDur.textContent = fmtDuration(t.durationSec || 0);
+          const tdKm = document.createElement('td');
+          tdKm.className = 'num';
+          tdKm.textContent = `${Number(t.distanceKm || 0).toFixed(2)} km`;
+          tr.append(tdAt, tdDur, tdKm);
+          tbody.append(tr);
+        }
+      }
+
+      function updateTripMeter() {
+        if (!onTrip) return;
+        const elapsedSec = Math.max(0, Math.floor((Date.now() - tripStartMs) / 1000));
+        $('mTime').textContent = fmtDuration(elapsedSec);
+        $('mDist').textContent = `${tripKm.toFixed(2)} km`;
+      }
+
+      function sendPingNow() {
         const now = Date.now();
-        if (!force && now - lastSent < MIN_GAP_MS) return;
         lastSent = now;
-        const c = pos.coords;
+        const c = lastPos?.coords;
         const body = {
-          lat: c.latitude,
-          lng: c.longitude,
-          speed: c.speed == null || Number.isNaN(c.speed) ? 0 : Math.max(0, c.speed * 3.6),
-          heading: c.heading == null || Number.isNaN(c.heading) ? 0 : ((c.heading % 360) + 360) % 360,
-          onTrip: $('trip').checked,
+          ...(c ? {
+            lat: c.latitude,
+            lng: c.longitude,
+            speed: c.speed == null || Number.isNaN(c.speed) ? 0 : Math.max(0, c.speed * 3.6),
+            heading: c.heading == null || Number.isNaN(c.heading) ? 0 : ((c.heading % 360) + 360) % 360,
+          } : {}),
+          onTrip,
           sharing: true,
           ts: now,
         };
+        if (c) {
+          $('locState').textContent = 'Sharing';
+          $('locCoords').textContent = `${c.latitude.toFixed(5)}, ${c.longitude.toFixed(5)}`;
+          $('locSpeed').textContent = `${Math.round(body.speed || 0)} km/h`;
+          $('locTime').textContent = new Date(now).toLocaleTimeString();
+        }
         api('/api/driver/ping', { method: 'POST', body, keepalive: true })
           .then((res) => {
             if (res.ok) {
-              say(`Sending. Last update ${new Date(now).toLocaleTimeString()} · ${Math.round(body.speed)} km/h`, 'ok');
+              say(`Sending. Last update ${new Date(now).toLocaleTimeString()} · ${Math.round(body.speed || 0)} km/h`, 'ok');
               loadMe().catch(() => {});
             } else if (res.status !== 401) {
               say(`Server refused the update: ${res.data.error || res.status}`, 'err');
             }
           })
           .catch(() => say('No connection. Will keep trying with each new GPS fix.', 'err'));
+      }
+
+      function sendPosition(pos, force = false) {
+        if (onTrip && pos?.coords) {
+          const cur = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          if (tripLastCoord) {
+            const d = haversineKm(tripLastCoord, cur);
+            if (d <= 2) tripKm += d;
+          }
+          tripLastCoord = cur;
+          updateTripMeter();
+        }
+        lastPos = pos;
+        const now = Date.now();
+        if (!force && now - lastSent < MIN_GAP_MS) return;
+        sendPingNow();
       }
 
       function stopSharing(notifyServer = true) {
@@ -408,8 +560,9 @@
         if (notifyServer && token) {
           api('/api/driver/ping', { method: 'POST', body: { sharing: false }, keepalive: true }).catch(() => {});
         }
-        $('go').textContent = 'Start sharing';
+        $('go').textContent = 'Start sharing location';
         $('go').setAttribute('aria-pressed', 'false');
+        $('locState').textContent = 'Stopped';
         say('Not sharing.');
       }
 
@@ -417,8 +570,9 @@
       function startSharing() {
         if (watchId !== null) return;
         if (!('geolocation' in navigator)) return say('This browser cannot read location.', 'err');
-        $('go').textContent = 'Stop sharing';
+        $('go').textContent = 'Stop sharing location';
         $('go').setAttribute('aria-pressed', 'true');
+        $('locState').textContent = 'Waiting for GPS';
         say('Waiting for GPS…');
         holdWakeLock();
         watchId = navigator.geolocation.watchPosition(
@@ -454,9 +608,58 @@
       document.addEventListener('touchstart', () => { if (watchId !== null) holdWakeLock(); }, { passive: true });
       document.addEventListener('click', () => { if (watchId !== null) holdWakeLock(); }, { passive: true });
 
-      $('trip').addEventListener('change', () => {
+      $('passengerBtn').addEventListener('click', async () => {
         holdWakeLock();
-        if (lastPos) sendPosition(lastPos, true);
+        if (!onTrip) {
+          onTrip = true;
+          tripStartMs = Date.now();
+          tripKm = 0;
+          tripLastCoord = lastPos?.coords ? { lat: lastPos.coords.latitude, lng: lastPos.coords.longitude } : null;
+          $('passengerBtn').textContent = 'Passenger drop off';
+          $('passengerBtn').className = 'primary dropoff';
+          $('passengerBtn').setAttribute('aria-pressed', 'true');
+          $('mState').textContent = 'On trip';
+          updateTripMeter();
+          clearInterval(tripTickTimer);
+          tripTickTimer = setInterval(updateTripMeter, 1000);
+          sendPingNow();
+        } else {
+          const endedAt = Date.now();
+          const durationSec = Math.max(1, Math.round((endedAt - tripStartMs) / 1000));
+          const distanceKm = Math.round(tripKm * 100) / 100;
+          onTrip = false;
+          clearInterval(tripTickTimer);
+          tripTickTimer = null;
+          $('passengerBtn').textContent = 'I have a passenger';
+          $('passengerBtn').className = 'primary';
+          $('passengerBtn').setAttribute('aria-pressed', 'false');
+          $('mState').textContent = 'Dropped off';
+          $('mTime').textContent = fmtDuration(durationSec);
+          $('mDist').textContent = `${distanceKm.toFixed(2)} km`;
+          const localTrip = {
+            id: `local-${endedAt}`,
+            taxiId: driver?.taxiId || '',
+            driverName: driver?.name || '',
+            startedAt: tripStartMs,
+            endedAt,
+            durationSec,
+            distanceKm,
+          };
+          tripList.unshift(localTrip);
+          writeStore(TRIPS_KEY, JSON.stringify(tripList.slice(0, 50)));
+          renderTrips();
+          sendPingNow();
+          const res = await api('/api/driver/trips', {
+            method: 'POST',
+            body: { startedAt: tripStartMs, endedAt, durationSec, distanceKm },
+            keepalive: true,
+          }).catch(() => null);
+          if (res?.ok && res.data?.trip) {
+            tripList[0] = res.data.trip;
+            writeStore(TRIPS_KEY, JSON.stringify(tripList.slice(0, 50)));
+            renderTrips();
+          }
+        }
       });
 
       $('go').addEventListener('click', () => {
@@ -472,6 +675,7 @@
         const res = await loadMe().catch(() => null);
         if (res && res.ok) {
           $('app').hidden = false;
+          renderTrips();
           connectDesk();
           startSharing();
           clearInterval(refreshTimer);

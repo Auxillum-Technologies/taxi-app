@@ -91,7 +91,7 @@ const ROUTES = [
   ['GET', /^\/api\/config$/, ownerOnly(config)],
   ['GET', /^\/api\/fleet$/, ownerOnly((req, res) => send(res, 200, liveSnapshot()))],
   ['GET', /^\/api\/snapshot$/, ownerOnly(snapshotAt)],
-  ['GET', /^\/api\/stats$/, ownerOnly((req, res) => send(res, 200, stats.summary()))],
+  ['GET', /^\/api\/stats$/, ownerOnly((req, res) => send(res, 200, liveStats()))],
   ['POST', /^\/api\/ingest$/, ingest],
 
   ['POST', /^\/api\/owner\/login$/, ownerLogin],
@@ -103,6 +103,7 @@ const ROUTES = [
   ['DELETE', /^\/api\/owner\/drivers\/(?<id>[^/]+)$/, ownerRemoveDriver],
   ['GET', /^\/api\/owner\/reports$/, ownerListReports],
   ['PATCH', /^\/api\/owner\/reports\/(?<id>[^/]+)$/, ownerSetReportStatus],
+  ['GET', /^\/api\/owner\/trips$/, ownerListTrips],
   ['GET', /^\/api\/owner\/messages$/, ownerListMessages],
   ['POST', /^\/api\/owner\/messages$/, ownerSendMessage],
 
@@ -110,6 +111,8 @@ const ROUTES = [
   ['POST', /^\/api\/driver\/logout$/, driverLogout],
   ['GET', /^\/api\/driver\/me$/, driverMe],
   ['POST', /^\/api\/driver\/ping$/, driverPing],
+  ['GET', /^\/api\/driver\/trips$/, driverListTrips],
+  ['POST', /^\/api\/driver\/trips$/, driverAddTrip],
   ['GET', /^\/api\/driver\/inbox$/, driverInbox],
   ['POST', /^\/api\/driver\/inbox\/(?<id>[^/]+)\/read$/, driverMarkRead],
   ['POST', /^\/api\/driver\/reports$/, driverReport],
@@ -206,6 +209,11 @@ function ownerListReports(req, res) {
   send(res, 200, { reports: desk.ownerReports() });
 }
 
+function ownerListTrips(req, res) {
+  if (!requireOwner(req, res)) return;
+  send(res, 200, { trips: desk.listTrips() });
+}
+
 async function ownerSetReportStatus(req, res, p) {
   if (!requireOwner(req, res)) return;
   const b = await readBody(req, res);
@@ -248,7 +256,7 @@ function driverMe(req, res) {
   const live = row
     ? { status: row.status, speed: row.speed, distanceKm: row.distanceKm, trips: row.trips, idleMin: row.idleMin, ts: row.ts, historyMinutes: LIMITS.historyMs / 60_000 }
     : null;
-  send(res, 200, { driver: publicDriver(d), live });
+  send(res, 200, { driver: publicDriver(d), live, trips: desk.driverTrips(d.id) });
 }
 
 // A driver's phone can only report its own taxi, whatever ID the body names.
@@ -264,8 +272,10 @@ async function driverPing(req, res) {
   }
   const now = Date.now();
   const prev = fleet.get(d.taxiId);
+  const lat = typeof b.lat === 'number' ? b.lat : (prev?.lat ?? CENTER.lat);
+  const lng = typeof b.lng === 'number' ? b.lng : (prev?.lng ?? CENTER.lng);
   const ts = typeof b.ts === 'number' && (!prev || b.ts >= prev.ts) ? b.ts : now;
-  const result = fleet.ingest({ ...b, ts, vehicleId: d.taxiId }, 'driver-phone', now);
+  const result = fleet.ingest({ ...b, lat, lng, ts, vehicleId: d.taxiId }, 'driver-phone', now);
   if (!result.ok) return send(res, 400, { error: result.error });
   activePhones.set(d.taxiId, {
     lat: result.value.lat,
@@ -275,7 +285,24 @@ async function driverPing(req, res) {
     updatedAt: now,
   });
   stats.sample(now);
+  broadcast('live', () => ({ type: 'stats', data: liveStats() }));
   send(res, 202, { accepted: true, stale: Boolean(result.stale) });
+}
+
+function driverListTrips(req, res) {
+  const d = requireDriver(req, res);
+  if (d) send(res, 200, { trips: desk.driverTrips(d.id) });
+}
+
+async function driverAddTrip(req, res) {
+  const d = requireDriver(req, res);
+  if (!d) return;
+  const b = await readBody(req, res);
+  if (!b) return;
+  if (typeof b !== 'object' || Array.isArray(b)) return send(res, 400, { error: 'body must be a JSON object' });
+  const r = desk.addTrip(d, b);
+  if (r.ok) broadcast('live', () => ({ type: 'stats', data: liveStats() }));
+  sendResult(res, r, 201, (trip) => ({ trip }));
 }
 
 function driverInbox(req, res) {
@@ -353,6 +380,10 @@ async function readBody(req, res) {
 // deskVersion changes when messages, reports or drivers change; the owner desk refetches on it.
 function liveSnapshot() {
   return { ...fleet.snapshot(), reports: desk.publicReports(), deskVersion: desk.version };
+}
+
+function liveStats() {
+  return { ...stats.summary(), trips: desk.listTrips() };
 }
 
 function readJson(req) {
@@ -433,7 +464,7 @@ wss.on('connection', (ws, req) => {
     clearTimeout(deadline);
     ws.token = msg.token;
     ws.send(JSON.stringify({ type: 'snapshot', data: liveSnapshot() }));
-    ws.send(JSON.stringify({ type: 'stats', data: stats.summary() }));
+    ws.send(JSON.stringify({ type: 'stats', data: liveStats() }));
   });
 });
 
@@ -466,7 +497,7 @@ setInterval(() => {
   if (deskChanged) broadcast('desk', { type: 'desk', version: desk.version });
 }, BROADCAST_MS);
 
-setInterval(() => broadcast('live', () => ({ type: 'stats', data: stats.summary() })), STATS_PUSH_MS);
+setInterval(() => broadcast('live', () => ({ type: 'stats', data: liveStats() })), STATS_PUSH_MS);
 
 server.listen(PORT, () => {
   console.log(`taxi monitor API on http://localhost:${PORT}`);
