@@ -279,6 +279,8 @@ function bearer(req) {
 }
 
 function clientKey(req) {
+  const fwd = req.headers['x-forwarded-for'];
+  if (typeof fwd === 'string' && fwd.trim()) return fwd.split(',')[0].trim();
   return req.socket.remoteAddress || 'unknown';
 }
 

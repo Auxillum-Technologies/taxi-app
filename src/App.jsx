@@ -448,7 +448,8 @@ export default function App({ token, onSignOut }) {
               Live
             </button>
             <label htmlFor="replay">
-              {replayMin === 0 ? 'Showing live positions' : `Replay ${replayMin} min ago`}
+              <span className="replay-label-full">{replayMin === 0 ? 'Showing live positions' : `Replay ${replayMin} min ago`}</span>
+              <span className="replay-label-short" aria-hidden="true">{replayMin === 0 ? 'Now' : `-${replayMin}m`}</span>
             </label>
             <input
               id="replay"

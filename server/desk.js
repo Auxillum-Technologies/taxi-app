@@ -262,6 +262,7 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS }
       createdAt: now(),
     };
     drivers.set(d.id, d);
+    nameFailures.delete(nameKey(name));
     changed();
     return ok(publicDriver(d));
   }

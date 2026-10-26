@@ -475,6 +475,9 @@ input[type="search"]::placeholder {
   min-width: 170px;
   font-size: var(--fs-sm);
 }
+.replay-label-short {
+  display: none;
+}
 .replay input[type="range"] {
   flex: 1;
   min-width: 120px;
@@ -1288,18 +1291,36 @@ input[type="search"]::placeholder {
   .card {
     top: calc(8px + var(--topbar-h) + 8px);
     left: var(--gutter);
-    right: var(--gutter);
+    right: calc(var(--gutter) + 64px + 8px);
     width: auto;
   }
-  /* Replay bar sits just above the vehicle sheet. */
+  /* Vertical Live / replay / traffic rail on the right edge in phone orientation. */
   .bottom {
-    left: var(--gutter);
+    top: calc(8px + var(--topbar-h) + 8px);
     right: var(--gutter);
-    bottom: calc(40vh + 18px);
-    padding: 6px 10px;
+    left: auto;
+    bottom: auto;
+    width: 64px;
+    padding: 8px 6px;
   }
   .replay {
+    flex-direction: column;
+    align-items: center;
     gap: 8px;
+  }
+  .replay-label-full {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .replay-label-short {
+    display: block;
+    font-size: var(--fs-xs);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
   }
   .replay label {
     min-width: 0;
@@ -1307,11 +1328,28 @@ input[type="search"]::placeholder {
     font-size: var(--fs-xs);
     white-space: nowrap;
   }
+  .replay .live {
+    width: 100%;
+    padding: 0 6px;
+    font-size: var(--fs-xs);
+  }
   .replay input[type="range"] {
+    writing-mode: vertical-lr;
+    direction: rtl;
+    width: 36px;
+    height: 108px;
     min-width: 0;
+    min-height: 108px;
+    flex: 0 0 auto;
   }
   .replay .chip {
-    padding: 0 10px;
+    width: 100%;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 4px;
+    border-radius: 14px;
+    font-size: 0.68rem;
+    line-height: 1.1;
   }
   .traffic-legend {
     display: none;
