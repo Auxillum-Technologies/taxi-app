@@ -61,6 +61,11 @@ export function createFleet({ limits = LIMITS } = {}) {
     const p = parsed.value;
     const prev = vehicles.get(p.vehicleId);
 
+    // A live tracker or driver phone overrides the simulator for the same taxi ID.
+    if (source === 'sim' && prev && prev.source !== 'sim' && now - prev.ts <= limits.offlineMs) {
+      return { ok: true, value: prev, stale: true };
+    }
+
     // Ignore out-of-order pings so an old packet never overwrites a newer one.
     if (prev && p.ts < prev.ts) return { ok: true, value: prev, stale: true };
 

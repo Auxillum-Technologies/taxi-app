@@ -26,7 +26,7 @@ const OWNER_PASSWORD = process.env.OWNER_PASSWORD || '';
 
 const DEFAULT_DRIVERS = [
   { name: 'alai', pin: '1215', taxiId: 'SIM-001' },
-  { name: 'alai01', pin: '1215', taxiId: 'SIM-002' },
+  { name: 'alai01', pin: '1215', taxiId: 'ALAI-01' },
 ];
 
 const fleet = createFleet();
@@ -236,8 +236,12 @@ async function driverPing(req, res) {
   const b = await readBody(req, res);
   if (!b) return;
   if (typeof b !== 'object' || Array.isArray(b)) return send(res, 400, { error: 'body must be a JSON object' });
-  const result = fleet.ingest({ ...b, vehicleId: d.taxiId }, 'driver-phone');
+  const now = Date.now();
+  const prev = fleet.get(d.taxiId);
+  const ts = typeof b.ts === 'number' && (!prev || b.ts >= prev.ts) ? b.ts : now;
+  const result = fleet.ingest({ ...b, ts, vehicleId: d.taxiId }, 'driver-phone', now);
   if (!result.ok) return send(res, 400, { error: result.error });
+  stats.sample(now);
   send(res, 202, { accepted: true, stale: Boolean(result.stale) });
 }
 

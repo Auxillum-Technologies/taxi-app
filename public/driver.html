@@ -171,6 +171,8 @@
       let token = readStore(TOKEN_KEY);
       let driver = null;
       let watchId = null;
+      let heartbeatTimer = null;
+      let lastPos = null;
       let lastSent = 0;
       let refreshTimer = null;
 
@@ -318,9 +320,10 @@
         $('status').className = 'status ' + (cls || '');
       }
 
-      function sendPosition(pos) {
+      function sendPosition(pos, force = false) {
+        lastPos = pos;
         const now = Date.now();
-        if (now - lastSent < MIN_GAP_MS) return;
+        if (!force && now - lastSent < MIN_GAP_MS) return;
         lastSent = now;
         const c = pos.coords;
         const body = {
@@ -329,12 +332,16 @@
           speed: c.speed == null || Number.isNaN(c.speed) ? 0 : Math.max(0, c.speed * 3.6),
           heading: c.heading == null || Number.isNaN(c.heading) ? 0 : ((c.heading % 360) + 360) % 360,
           onTrip: $('trip').checked,
-          ts: pos.timestamp || now,
+          ts: now,
         };
         api('/api/driver/ping', { method: 'POST', body })
           .then((res) => {
-            if (res.ok) say(`Sending. Last update ${new Date(now).toLocaleTimeString()} · ${Math.round(body.speed)} km/h`, 'ok');
-            else if (res.status !== 401) say(`Server refused the update: ${res.data.error || res.status}`, 'err');
+            if (res.ok) {
+              say(`Sending. Last update ${new Date(now).toLocaleTimeString()} · ${Math.round(body.speed)} km/h`, 'ok');
+              loadMe().catch(() => {});
+            } else if (res.status !== 401) {
+              say(`Server refused the update: ${res.data.error || res.status}`, 'err');
+            }
           })
           .catch(() => say('No connection. Will keep trying with each new GPS fix.', 'err'));
       }
@@ -342,6 +349,8 @@
       function stopSharing() {
         if (watchId !== null) navigator.geolocation.clearWatch(watchId);
         watchId = null;
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
         $('go').textContent = 'Start sharing';
         $('go').setAttribute('aria-pressed', 'false');
         say('Not sharing.');
@@ -355,11 +364,19 @@
         $('go').setAttribute('aria-pressed', 'true');
         say('Waiting for GPS…');
         watchId = navigator.geolocation.watchPosition(
-          sendPosition,
+          (pos) => sendPosition(pos, false),
           (err) => say(`Location error: ${err.message}. Check the browser's location permission.`, 'err'),
           { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 },
         );
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = setInterval(() => {
+          if (watchId !== null && lastPos) sendPosition(lastPos, true);
+        }, 10000);
       }
+
+      $('trip').addEventListener('change', () => {
+        if (lastPos) sendPosition(lastPos, true);
+      });
 
       $('go').addEventListener('click', () => {
         if (watchId !== null) return stopSharing();
