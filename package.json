@@ -1,0 +1,26 @@
+{
+  "name": "taxi-fleet-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Realtime 3D taxi fleet monitor: tracker + driver-phone ingest, simulated fleet for testing, 3D map.",
+  "scripts": {
+    "dev:server": "node --watch server/index.js",
+    "dev:client": "vite",
+    "dev": "echo 'Run in two terminals: npm run dev:server and npm run dev:client' && exit 0",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "test": "node --test server/store.test.js server/desk.test.js server/stats.test.js"
+  },
+  "dependencies": {
+    "maplibre-gl": "^6.16.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "three": "^0.186.1",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.2",
+    "vite": "^8.3.5"
+  }
+}

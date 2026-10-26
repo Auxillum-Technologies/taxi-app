@@ -1,0 +1,447 @@
+// Driver accounts (name + PIN sign-in, taxi details), owner-to-driver messages and driver field reports.
+// Kept in memory. With a file path it also saves one JSON file so it survives restarts.
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { randomBytes, randomUUID, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
+import { dirname } from 'node:path';
+import { promisify } from 'node:util';
+
+const scrypt = promisify(scryptCb);
+
+export const REPORT_TYPES = ['rescue', 'road', 'flood', 'traffic', 'other'];
+export const REPORT_STATUSES = ['open', 'acknowledged', 'resolved'];
+
+export const DESK_LIMITS = {
+  sessionMs: 12 * 60 * 60_000,
+  passwordMin: 8,
+  passwordMax: 128,
+  maxNoteLen: 280,
+  maxMessageLen: 1000,
+  maxMessages: 1000,
+  maxReports: 500,
+  reportCooldownMs: 5_000, // one driver, one report per 5 s
+  fallbackFixMs: 10 * 60_000, // last GPS ping counts as a location only this recent
+  loginWindowMs: 15 * 60_000,
+  loginMaxFailures: 10, // per client address, per window
+  nameMaxFailures: 5, // wrong PINs per driver name, per window (a 4-digit PIN has only 10,000 values)
+  publicResolvedMs: 30 * 60_000, // resolved reports stay on the map this long
+};
+
+const PIN = /^\d{4,6}$/;
+const TAXI_ID = /^[A-Za-z0-9._-]{1,64}$/;
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+// Taxi details the owner records: field -> max length. All optional, filled in when known.
+export const TAXI_FIELDS = { plate: 16, model: 40, bodyNumber: 16, franchiseNo: 40, franchiseExpiry: 10 };
+const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+const fail = (error, status = 400) => ({ ok: false, error, status });
+const ok = (value) => ({ ok: true, value });
+
+// Unknown names still pay the cost of a real check, so timing does not reveal accounts.
+const DECOY_HASH = hashPassword(randomUUID());
+
+export async function hashPassword(password) {
+  const salt = randomBytes(16);
+  const key = await scrypt(password, salt, 64);
+  return `scrypt$${salt.toString('hex')}$${key.toString('hex')}`;
+}
+
+export async function verifyPassword(password, stored) {
+  const [scheme, saltHex, keyHex] = String(stored).split('$');
+  if (scheme !== 'scrypt' || !saltHex || !keyHex) return false;
+  const expected = Buffer.from(keyHex, 'hex');
+  const actual = await scrypt(String(password), Buffer.from(saltHex, 'hex'), expected.length);
+  return timingSafeEqual(expected, actual);
+}
+
+export function publicDriver(d) {
+  return { id: d.id, name: d.name, taxiId: d.taxiId, taxi: { ...emptyTaxi(), ...d.taxi }, hasPin: Boolean(d.pinHash), createdAt: d.createdAt };
+}
+
+// The sign-in key for a name: case and extra spaces do not matter ("Juan  dela Cruz" = "juan dela cruz").
+export function nameKey(name) {
+  return typeof name === 'string' ? name.trim().replace(/\s+/g, ' ').toLowerCase() : '';
+}
+
+function emptyTaxi() {
+  return Object.fromEntries(Object.keys(TAXI_FIELDS).map((k) => [k, '']));
+}
+
+// Returns { taxi } with trimmed strings, or { error }. `base` supplies fields the input leaves out.
+function checkTaxi(input, base = emptyTaxi()) {
+  if (input === undefined || input === null) return { taxi: base };
+  if (typeof input !== 'object' || Array.isArray(input)) return { error: 'taxi must be an object' };
+  const taxi = { ...base };
+  for (const [key, max] of Object.entries(TAXI_FIELDS)) {
+    if (input[key] === undefined) continue;
+    const v = typeof input[key] === 'string' ? input[key].trim().replace(/\s+/g, ' ') : null;
+    if (v === null || v.length > max) return { error: `${key} must be text of at most ${max} characters` };
+    taxi[key] = v;
+  }
+  if (taxi.franchiseExpiry && !(DATE.test(taxi.franchiseExpiry) && !Number.isNaN(Date.parse(taxi.franchiseExpiry)))) {
+    return { error: 'franchiseExpiry must be a date like 2027-03-31' };
+  }
+  return { taxi };
+}
+
+function checkPin(pin) {
+  return typeof pin === 'string' && PIN.test(pin) ? null : 'PIN must be 4 to 6 digits';
+}
+
+function checkPassword(p) {
+  if (typeof p !== 'string' || p.length < DESK_LIMITS.passwordMin || p.length > DESK_LIMITS.passwordMax) {
+    return `password must be ${DESK_LIMITS.passwordMin}-${DESK_LIMITS.passwordMax} characters`;
+  }
+  return null;
+}
+
+export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS } = {}) {
+  const drivers = new Map(); // id -> record incl. pinHash (never sent to clients)
+  const messages = []; // { id, to: driverId | 'all', text, at, readBy: [driverId] }
+  const reports = []; // { id, driverId, driverName, taxiId, type, text, lat, lng, status, at, updatedAt }
+  const sessions = new Map(); // token -> { role, driverId?, expires }
+  const failures = new Map(); // client key -> { count, since }
+  const nameFailures = new Map(); // nameKey -> { count, since }
+  const lastReportAt = new Map(); // driverId -> ms
+  let ownerHash = null;
+  let version = 0; // bumps on every saved change, lets the broadcaster skip idle ticks
+  let saveTimer = null;
+
+  // ---------- persistence ----------
+
+  function load() {
+    if (!file || !existsSync(file)) return;
+    let data;
+    try {
+      data = JSON.parse(readFileSync(file, 'utf8'));
+    } catch (err) {
+      // Refuse to start rather than overwrite a file we could not read.
+      throw new Error(`${file} is not valid JSON (${err.message}). Move it aside to start with empty data.`);
+    }
+    for (const d of data.drivers ?? []) drivers.set(d.id, d);
+    messages.push(...(data.messages ?? []));
+    reports.push(...(data.reports ?? []));
+  }
+
+  function save() {
+    if (!file) return;
+    mkdirSync(dirname(file), { recursive: true });
+    const tmp = `${file}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ version: 1, drivers: [...drivers.values()], messages, reports }, null, 2));
+    renameSync(tmp, file);
+  }
+
+  function flush() {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    save();
+  }
+
+  function changed() {
+    version++;
+    if (!file || saveTimer) return;
+    saveTimer = setTimeout(flush, 200); // batch bursts of writes into one save
+  }
+
+  // ---------- sign-in and sessions ----------
+
+  function throttled(key, map = failures, max = limits.loginMaxFailures) {
+    const f = map.get(key);
+    if (!f) return false;
+    if (now() - f.since > limits.loginWindowMs) {
+      map.delete(key);
+      return false;
+    }
+    return f.count >= max;
+  }
+
+  function recordFailure(key, map = failures) {
+    const t = now();
+    const f = map.get(key);
+    if (!f || t - f.since > limits.loginWindowMs) map.set(key, { count: 1, since: t });
+    else f.count++;
+  }
+
+  function openSession(session) {
+    const token = randomBytes(32).toString('base64url');
+    sessions.set(token, { ...session, expires: now() + limits.sessionMs });
+    return token;
+  }
+
+  function sessionFor(token, role) {
+    if (typeof token !== 'string' || !token) return null;
+    const s = sessions.get(token);
+    if (!s) return null;
+    if (s.expires < now()) {
+      sessions.delete(token);
+      return null;
+    }
+    return role && s.role !== role ? null : s;
+  }
+
+  function closeSession(token) {
+    sessions.delete(token);
+  }
+
+  // Returns the driver record for a valid driver session, or null (also after the driver was removed).
+  function driverFor(token) {
+    const s = sessionFor(token, 'driver');
+    return (s && drivers.get(s.driverId)) || null;
+  }
+
+  async function setOwnerPassword(password) {
+    const err = checkPassword(password);
+    if (err) throw new Error(`OWNER_PASSWORD: ${err}`);
+    ownerHash = await hashPassword(password);
+  }
+
+  async function ownerLogin({ password, key }) {
+    if (throttled(key)) return fail('too many failed sign-ins; wait 15 minutes', 429);
+    const good = typeof password === 'string' && ownerHash !== null && (await verifyPassword(password, ownerHash));
+    if (!good) {
+      recordFailure(key);
+      return fail('wrong password', 401);
+    }
+    failures.delete(key);
+    return ok({ token: openSession({ role: 'owner' }), expiresInMs: limits.sessionMs });
+  }
+
+  // Name + PIN. Wrong PINs count against the address and against the name, so one
+  // driver's PIN cannot be guessed from many addresses either.
+  async function driverLogin({ name, pin, key }) {
+    const nk = nameKey(name);
+    if (throttled(key) || throttled(nk, nameFailures, limits.nameMaxFailures)) {
+      return fail('too many wrong PINs; wait 15 minutes or ask the owner', 429);
+    }
+    const driver = nk ? [...drivers.values()].find((d) => nameKey(d.name) === nk) : null;
+    const hash = driver?.pinHash || (await DECOY_HASH); // a driver without a PIN yet cannot sign in
+    const good = typeof pin === 'string' && PIN.test(pin) && (await verifyPassword(pin, hash)) && Boolean(driver?.pinHash);
+    if (!good) {
+      recordFailure(key);
+      if (nk) recordFailure(nk, nameFailures);
+      return fail('that name and PIN do not match', 401);
+    }
+    failures.delete(key);
+    nameFailures.delete(nk);
+    return ok({ token: openSession({ role: 'driver', driverId: driver.id }), driver: publicDriver(driver) });
+  }
+
+  // ---------- drivers ----------
+
+  // Checks name and taxi ID for a driver record; `selfId` skips the record being edited.
+  function checkIdentity(name, taxiId, selfId = null) {
+    if (!name || name.length > 60) return 'name must be 1-60 characters';
+    if (!TAXI_ID.test(taxiId)) return 'taxiId must be 1-64 characters: letters, digits, . _ -';
+    const others = [...drivers.values()].filter((d) => d.id !== selfId);
+    if (others.some((d) => nameKey(d.name) === nameKey(name))) return 'another driver already has that name; add a middle initial or surname';
+    if (others.some((d) => d.taxiId === taxiId)) return 'that taxi ID already has a driver';
+    return null;
+  }
+
+  async function addDriver(input) {
+    const name = typeof input?.name === 'string' ? input.name.trim().replace(/\s+/g, ' ') : '';
+    const taxiId = typeof input?.taxiId === 'string' ? input.taxiId.trim() : '';
+    const idErr = checkIdentity(name, taxiId);
+    if (idErr) return fail(idErr, idErr.startsWith('another') || idErr.startsWith('that taxi') ? 409 : 400);
+    const pinErr = checkPin(input.pin);
+    if (pinErr) return fail(pinErr);
+    const { taxi, error } = checkTaxi(input.taxi);
+    if (error) return fail(error);
+
+    const d = {
+      id: randomUUID(),
+      name,
+      taxiId,
+      taxi,
+      pinHash: await hashPassword(input.pin),
+      createdAt: now(),
+    };
+    drivers.set(d.id, d);
+    changed();
+    return ok(publicDriver(d));
+  }
+
+  // Edits name, taxi ID, taxi details, and/or resets the PIN. A PIN reset ends the driver's sessions.
+  async function updateDriver(id, input) {
+    const d = drivers.get(id);
+    if (!d) return fail('driver not found', 404);
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return fail('body must be a JSON object');
+    const name = input.name === undefined ? d.name : typeof input.name === 'string' ? input.name.trim().replace(/\s+/g, ' ') : '';
+    const taxiId = input.taxiId === undefined ? d.taxiId : typeof input.taxiId === 'string' ? input.taxiId.trim() : '';
+    const idErr = checkIdentity(name, taxiId, id);
+    if (idErr) return fail(idErr, idErr.startsWith('another') || idErr.startsWith('that taxi') ? 409 : 400);
+    const { taxi, error } = checkTaxi(input.taxi, { ...emptyTaxi(), ...d.taxi });
+    if (error) return fail(error);
+    let pinHash = d.pinHash;
+    if (input.pin !== undefined && input.pin !== '') {
+      const pinErr = checkPin(input.pin);
+      if (pinErr) return fail(pinErr);
+      pinHash = await hashPassword(input.pin);
+      for (const [token, s] of sessions) if (s.driverId === id) sessions.delete(token);
+      nameFailures.delete(nameKey(d.name));
+    }
+    Object.assign(d, { name, taxiId, taxi, pinHash });
+    delete d.username; // records from before PIN sign-in
+    delete d.passwordHash;
+    changed();
+    return ok(publicDriver(d));
+  }
+
+  function removeDriver(id) {
+    if (!drivers.delete(id)) return false;
+    for (const [token, s] of sessions) if (s.driverId === id) sessions.delete(token);
+    changed();
+    return true;
+  }
+
+  function listDrivers() {
+    return [...drivers.values()].map(publicDriver).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // ---------- messages ----------
+
+  function sendMessage({ to, text }) {
+    if (to !== 'all' && !drivers.has(to)) return fail('to must be "all" or an existing driver id');
+    const body = typeof text === 'string' ? text.trim() : '';
+    if (!body || body.length > limits.maxMessageLen) return fail(`message must be 1-${limits.maxMessageLen} characters`);
+    const m = { id: randomUUID(), to, text: body, at: now(), readBy: [] };
+    messages.push(m);
+    while (messages.length > limits.maxMessages) messages.shift();
+    changed();
+    return ok(m);
+  }
+
+  function inboxFor(driverId) {
+    return messages
+      .filter((m) => m.to === driverId || m.to === 'all')
+      .slice(-100)
+      .reverse()
+      .map((m) => ({ id: m.id, text: m.text, at: m.at, read: m.readBy.includes(driverId) }));
+  }
+
+  function markRead(driverId, messageId) {
+    const m = messages.find((x) => x.id === messageId);
+    if (!m || (m.to !== driverId && m.to !== 'all')) return false;
+    if (!m.readBy.includes(driverId)) {
+      m.readBy.push(driverId);
+      changed();
+    }
+    return true;
+  }
+
+  function sentMessages() {
+    return messages
+      .slice(-100)
+      .reverse()
+      .map((m) => ({
+        id: m.id,
+        to: m.to,
+        toName: m.to === 'all' ? 'All drivers' : (drivers.get(m.to)?.name ?? 'removed driver'),
+        text: m.text,
+        at: m.at,
+        readCount: m.readBy.length,
+      }));
+  }
+
+  // ---------- reports ----------
+
+  // `fallbackFix` is the driver's last GPS ping, used only when the report carries no location.
+  function addReport(driver, input, fallbackFix = null) {
+    const type = input.type;
+    if (!REPORT_TYPES.includes(type)) return fail(`type must be one of ${REPORT_TYPES.join(', ')}`);
+
+    let note = '';
+    if (input.text !== undefined && input.text !== null) {
+      if (typeof input.text !== 'string' || input.text.trim().length > limits.maxNoteLen) {
+        return fail(`text must be a string of at most ${limits.maxNoteLen} characters`);
+      }
+      note = input.text.trim();
+    }
+    if (type === 'other' && !note) return fail('add a short description for an "other" report');
+
+    let spot;
+    if (input.lat !== undefined || input.lng !== undefined) {
+      if (!isNum(input.lat) || input.lat < -90 || input.lat > 90) return fail('lat must be a number in [-90, 90]');
+      if (!isNum(input.lng) || input.lng < -180 || input.lng > 180) return fail('lng must be a number in [-180, 180]');
+      spot = { lat: input.lat, lng: input.lng };
+    } else if (fallbackFix) {
+      spot = { lat: fallbackFix.lat, lng: fallbackFix.lng };
+    } else {
+      return fail('location unknown: allow location on the phone, or send lat and lng');
+    }
+
+    const t = now();
+    if (t - (lastReportAt.get(driver.id) ?? -Infinity) < limits.reportCooldownMs) {
+      return fail('wait a few seconds before sending another report', 429);
+    }
+    lastReportAt.set(driver.id, t);
+
+    const r = {
+      id: randomUUID(),
+      driverId: driver.id,
+      driverName: driver.name,
+      taxiId: driver.taxiId,
+      type,
+      text: note,
+      lat: spot.lat,
+      lng: spot.lng,
+      status: 'open',
+      at: t,
+      updatedAt: t,
+    };
+    reports.push(r);
+    while (reports.length > limits.maxReports) {
+      const i = reports.findIndex((x) => x.status === 'resolved');
+      reports.splice(i >= 0 ? i : 0, 1);
+    }
+    changed();
+    return ok(r);
+  }
+
+  function setReportStatus(id, status) {
+    if (!REPORT_STATUSES.includes(status)) return fail(`status must be one of ${REPORT_STATUSES.join(', ')}`);
+    const r = reports.find((x) => x.id === id);
+    if (!r) return fail('report not found', 404);
+    r.status = status;
+    r.updatedAt = now();
+    changed();
+    return ok(r);
+  }
+
+  // What anyone viewing the map may see: no driver names, no account data.
+  function publicReports() {
+    const cutoff = now() - limits.publicResolvedMs;
+    return reports
+      .filter((r) => r.status !== 'resolved' || r.updatedAt >= cutoff)
+      .map(({ id, type, text, taxiId, lat, lng, status, at }) => ({ id, type, text, taxiId, lat, lng, status, at }));
+  }
+
+  function ownerReports() {
+    return reports.slice(-200).reverse();
+  }
+
+  load();
+
+  return {
+    setOwnerPassword,
+    ownerLogin,
+    driverLogin,
+    sessionFor,
+    driverFor,
+    closeSession,
+    addDriver,
+    updateDriver,
+    removeDriver,
+    listDrivers,
+    sendMessage,
+    inboxFor,
+    markRead,
+    sentMessages,
+    addReport,
+    setReportStatus,
+    publicReports,
+    ownerReports,
+    flush,
+    get version() {
+      return version;
+    },
+  };
+}

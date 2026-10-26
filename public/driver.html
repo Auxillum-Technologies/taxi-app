@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2315803d'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23fff'/%3E%3C/svg%3E" />
+    <title>My taxi · Driver</title>
+    <style>
+      :root {
+        --bg: #eef6f0;
+        --panel: #ffffff;
+        --line: #cfe3d5;
+        --text: #0f2a1a;
+        --muted: #4b6353;
+        --accent: #15803d;
+        --accent-ink: #ffffff;
+        --bad: #dc2626;
+        --ok: #15803d;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        padding: 16px;
+      }
+      main { max-width: 440px; margin: 0 auto; }
+      h1 { font-size: 1.2rem; margin: 8px 0 4px; }
+      h2 { font-size: 1rem; margin: 0 0 8px; }
+      p { color: var(--muted); line-height: 1.45; margin: 6px 0; }
+      section {
+        background: var(--panel);
+        border-radius: 14px;
+        padding: 14px;
+        margin-top: 14px;
+      }
+      label { display: block; margin: 12px 0 6px; font-size: 0.9rem; }
+      input[type="text"], input[type="password"], input[type="search"] {
+        width: 100%;
+        min-height: 48px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #f7fbf8;
+        color: var(--text);
+        font: inherit;
+      }
+      .check { display: flex; align-items: center; gap: 10px; min-height: 48px; margin-top: 6px; }
+      .check input { width: 22px; height: 22px; accent-color: var(--accent); }
+      button {
+        min-height: 48px;
+        padding: 0 14px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #f1f8f3;
+        color: var(--text);
+        font: inherit;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.5; cursor: default; }
+      button.primary {
+        width: 100%;
+        min-height: 56px;
+        margin-top: 12px;
+        border: 0;
+        background: var(--accent);
+        color: var(--accent-ink);
+        font-weight: 700;
+        font-size: 1.05rem;
+      }
+      button.primary[aria-pressed="true"] { background: #dcefe2; color: var(--text); }
+      button.ghost { min-height: 44px; background: transparent; }
+      .status { margin-top: 12px; font-variant-numeric: tabular-nums; min-height: 1.4em; }
+      .err { color: var(--bad); }
+      .ok { color: var(--ok); }
+      .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+      .facts { display: grid; grid-template-columns: 8.5em 1fr; gap: 8px 12px; margin: 0; }
+      .facts dt { color: var(--muted); font-size: 0.9rem; }
+      .facts dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+      .facts dd.none { font-weight: 400; color: var(--muted); }
+      .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0; }
+      .tiles div { padding: 10px 12px; border-radius: 10px; background: #f1f8f3; }
+      .tiles dt { color: var(--muted); font-size: 0.8rem; }
+      .tiles dd { margin: 2px 0 0; font-size: 1.25rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+      .badge { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; font-size: 0.8rem; font-weight: 600; vertical-align: 1px; }
+      .badge.bad { background: #fde8e8; color: #b91c1c; }
+      .badge.warn { background: #fdf3d8; color: #8a5a00; }
+      .pill { display: inline-flex; align-items: center; gap: 6px; }
+      .pill::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: #94a3b8; }
+      .pill.free::before { background: #15803d; }
+      .pill.on_trip::before { background: #f59e0b; }
+      .note { font-size: 0.85rem; }
+      :focus-visible { outline: 2px solid #166534; outline-offset: 2px; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <!-- Shown only when the page cannot reach the server; signed-out drivers go to the sign-in screen. -->
+      <section id="offline" hidden aria-labelledby="offline-h">
+        <h1 id="offline-h">No connection</h1>
+        <p id="offlineMsg">Could not reach the server.</p>
+        <button class="primary" type="button" id="retry">Try again</button>
+      </section>
+
+      <div id="app" hidden>
+        <div class="head">
+          <div>
+            <p>Driver</p>
+            <h1 id="who"></h1>
+          </div>
+          <button type="button" class="ghost" id="signout">Sign out</button>
+        </div>
+
+        <section aria-labelledby="profile-h">
+          <h2 id="profile-h">My profile</h2>
+          <dl class="facts">
+            <dt>Name</dt><dd id="pName"></dd>
+            <dt>Driver since</dt><dd id="pSince"></dd>
+            <dt>Assigned taxi</dt><dd id="pTaxi"></dd>
+          </dl>
+        </section>
+
+        <section aria-labelledby="taxi-h">
+          <h2 id="taxi-h">My taxi</h2>
+          <dl class="facts">
+            <dt>Plate number</dt><dd id="tPlate"></dd>
+            <dt>Make and model</dt><dd id="tModel"></dd>
+            <dt>Body number</dt><dd id="tBody"></dd>
+            <dt>Franchise no.</dt><dd id="tFranchise"></dd>
+            <dt>Franchise expiry</dt><dd id="tExpiry"></dd>
+          </dl>
+          <p class="note">Something wrong here? Ask the owner to correct it.</p>
+        </section>
+
+        <section aria-labelledby="live-h">
+          <h2 id="live-h">Right now</h2>
+          <dl class="tiles">
+            <div><dt>Status</dt><dd id="lStatus"></dd></div>
+            <div><dt>Speed</dt><dd id="lSpeed"></dd></div>
+            <div><dt id="lDistLabel">Distance, last 30 min</dt><dd id="lDist"></dd></div>
+            <div><dt>Trips recorded</dt><dd id="lTrips"></dd></div>
+          </dl>
+          <p class="note" id="lNote"></p>
+        </section>
+
+        <section aria-labelledby="share-h">
+          <h2 id="share-h">Location</h2>
+          <p>Keep this page open while you drive. Your phone sends its GPS position to the fleet monitor.
+            Browsers only allow location on an <strong>https</strong> page (or localhost).</p>
+          <label class="check"><input id="trip" type="checkbox" /> I have a passenger on board</label>
+          <button id="go" class="primary" type="button" aria-pressed="false">Start sharing</button>
+          <div id="status" class="status" role="status" aria-live="polite">Not sharing.</div>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      // Driver page: the driver's profile, their taxi, its live numbers, and GPS sharing
+      // (posted under this driver's own taxi). Sign-in happens on the shared screen at /?as=driver.
+      const $ = (id) => document.getElementById(id);
+      const TOKEN_KEY = 'taxi.driverToken';
+      const SIGN_IN = '/?as=driver';
+      const MIN_GAP_MS = 3000;
+      const REFRESH_MS = 15000; // live numbers; owner edits also arrive through the desk socket
+      const STATUS_LABEL = { free: 'Free', on_trip: 'On trip', offline: 'Offline' };
+
+      let token = readStore(TOKEN_KEY);
+      let driver = null;
+      let watchId = null;
+      let lastSent = 0;
+      let refreshTimer = null;
+
+      function readStore(key) {
+        try { return localStorage.getItem(key) || ''; } catch { return ''; }
+      }
+      function writeStore(key, value) {
+        try {
+          if (value) localStorage.setItem(key, value);
+          else localStorage.removeItem(key);
+        } catch { /* storage blocked: sign-in lasts only this page visit */ }
+      }
+
+      async function api(path, opts = {}) {
+        const headers = { accept: 'application/json' };
+        if (opts.body !== undefined) headers['content-type'] = 'application/json';
+        if (token) headers.authorization = 'Bearer ' + token;
+        const res = await fetch(path, {
+          method: opts.method || 'GET',
+          headers,
+          body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 401 && token) signedOut();
+        return { ok: res.ok, status: res.status, data };
+      }
+
+      function signedOut() {
+        stopSharing();
+        token = '';
+        driver = null;
+        writeStore(TOKEN_KEY, '');
+        clearInterval(refreshTimer);
+        stopDesk();
+        location.replace(SIGN_IN);
+      }
+
+      $('signout').addEventListener('click', async () => {
+        await api('/api/driver/logout', { method: 'POST' }).catch(() => {});
+        signedOut();
+      });
+
+      // ---------- profile, taxi, live numbers ----------
+
+      function fact(id, value, empty = 'Not recorded yet') {
+        $(id).textContent = value || empty;
+        $(id).className = value ? '' : 'none';
+      }
+
+      function daysUntil(date) {
+        const [y, m, d] = date.split('-').map(Number);
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        return Math.round((new Date(y, m - 1, d) - today) / 86400000);
+      }
+
+      function showExpiry(date) {
+        const el = $('tExpiry');
+        el.replaceChildren();
+        if (!date) return fact('tExpiry', '');
+        el.className = '';
+        const [y, m, d] = date.split('-').map(Number);
+        el.append(new Date(y, m - 1, d).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }));
+        const days = daysUntil(date);
+        if (days > 30) return;
+        const badge = document.createElement('span');
+        badge.className = days < 0 ? 'badge bad' : 'badge warn';
+        badge.textContent = days < 0 ? 'Expired' : days === 0 ? 'Expires today' : `${days} day${days === 1 ? '' : 's'} left`;
+        el.append(badge);
+      }
+
+      function render(data) {
+        driver = data.driver;
+        const t = driver.taxi || {};
+        $('who').textContent = driver.name;
+        fact('pName', driver.name);
+        fact('pSince', new Date(driver.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }));
+        fact('pTaxi', driver.taxiId);
+        fact('tPlate', t.plate);
+        fact('tModel', t.model);
+        fact('tBody', t.bodyNumber);
+        fact('tFranchise', t.franchiseNo);
+        showExpiry(t.franchiseExpiry);
+
+        const live = data.live;
+        if (!live) {
+          $('lStatus').textContent = 'No signal';
+          for (const id of ['lSpeed', 'lDist', 'lTrips']) $(id).textContent = '–';
+          $('lNote').textContent = 'The fleet monitor has no recent position for your taxi. Start sharing below, or check the GPS tracker.';
+          return;
+        }
+        const pill = document.createElement('span');
+        pill.className = 'pill ' + live.status;
+        pill.textContent = STATUS_LABEL[live.status] || live.status;
+        $('lStatus').replaceChildren(pill);
+        $('lSpeed').textContent = `${Math.round(live.speed)} km/h`;
+        $('lDistLabel').textContent = `Distance, last ${live.historyMinutes} min`;
+        $('lDist').textContent = `${live.distanceKm.toFixed(1)} km`;
+        $('lTrips').textContent = String(live.trips);
+        $('lNote').textContent = `Last position ${new Date(live.ts).toLocaleTimeString()}. Trips count from when the fleet server last started.`;
+      }
+
+      async function loadMe() {
+        if (!token) return null;
+        const res = await api('/api/driver/me');
+        if (res.ok) render(res.data);
+        return res;
+      }
+
+      // Desk socket: a tiny notice when desk data changes (for example the owner edits this
+      // taxi's details), never fleet data, so it stays light on mobile data. Reconnects with backoff.
+      let deskSocket = null;
+      let deskRetry = 0;
+      let deskTimer = null;
+
+      function connectDesk() {
+        if (!token || deskSocket) return;
+        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+        deskSocket = new WebSocket(`${proto}://${location.host}/ws?feed=desk`);
+        deskSocket.onopen = () => { deskRetry = 0; };
+        deskSocket.onmessage = (e) => {
+          try {
+            if (JSON.parse(e.data).type === 'desk') loadMe().catch(() => {});
+          } catch { /* ignore malformed frames */ }
+        };
+        deskSocket.onclose = () => {
+          deskSocket = null;
+          if (!token) return;
+          deskRetry++;
+          deskTimer = setTimeout(connectDesk, Math.min(30000, 1000 * 2 ** deskRetry));
+        };
+      }
+
+      function stopDesk() {
+        clearTimeout(deskTimer);
+        const s = deskSocket;
+        deskSocket = null;
+        s?.close();
+      }
+
+      // ---------- location sharing ----------
+
+      function say(text, cls) {
+        $('status').textContent = text;
+        $('status').className = 'status ' + (cls || '');
+      }
+
+      function sendPosition(pos) {
+        const now = Date.now();
+        if (now - lastSent < MIN_GAP_MS) return;
+        lastSent = now;
+        const c = pos.coords;
+        const body = {
+          lat: c.latitude,
+          lng: c.longitude,
+          speed: c.speed == null || Number.isNaN(c.speed) ? 0 : Math.max(0, c.speed * 3.6),
+          heading: c.heading == null || Number.isNaN(c.heading) ? 0 : ((c.heading % 360) + 360) % 360,
+          onTrip: $('trip').checked,
+          ts: pos.timestamp || now,
+        };
+        api('/api/driver/ping', { method: 'POST', body })
+          .then((res) => {
+            if (res.ok) say(`Sending. Last update ${new Date(now).toLocaleTimeString()} · ${Math.round(body.speed)} km/h`, 'ok');
+            else if (res.status !== 401) say(`Server refused the update: ${res.data.error || res.status}`, 'err');
+          })
+          .catch(() => say('No connection. Will keep trying with each new GPS fix.', 'err'));
+      }
+
+      function stopSharing() {
+        if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+        $('go').textContent = 'Start sharing';
+        $('go').setAttribute('aria-pressed', 'false');
+        say('Not sharing.');
+      }
+
+      // Sharing starts as soon as the driver's page opens; the button stops it and starts it again.
+      function startSharing() {
+        if (watchId !== null) return;
+        if (!('geolocation' in navigator)) return say('This browser cannot read location.', 'err');
+        $('go').textContent = 'Stop sharing';
+        $('go').setAttribute('aria-pressed', 'true');
+        say('Waiting for GPS…');
+        watchId = navigator.geolocation.watchPosition(
+          sendPosition,
+          (err) => say(`Location error: ${err.message}. Check the browser's location permission.`, 'err'),
+          { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 },
+        );
+      }
+
+      $('go').addEventListener('click', () => {
+        if (watchId !== null) return stopSharing();
+        startSharing();
+      });
+
+      // ---------- start ----------
+
+      async function start() {
+        if (!token) return location.replace(SIGN_IN);
+        $('offline').hidden = true;
+        const res = await loadMe().catch(() => null);
+        if (res && res.ok) {
+          $('app').hidden = false;
+          connectDesk();
+          startSharing();
+          clearInterval(refreshTimer);
+          refreshTimer = setInterval(() => loadMe().catch(() => {}), REFRESH_MS);
+        } else if (!res || res.status !== 401) {
+          $('offlineMsg').textContent = 'Could not reach the server. Check your mobile data, then try again.';
+          $('offline').hidden = false;
+        }
+      }
+
+      $('retry').addEventListener('click', start);
+      start();
+    </script>
+  </body>
+</html>
