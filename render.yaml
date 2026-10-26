@@ -1,0 +1,19 @@
+# Render Blueprint: New > Blueprint, pick this repo.
+# Builds the map UI and runs the API + WebSocket server in one process.
+services:
+  - type: web
+    name: taxi-app
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: OWNER_PASSWORD
+        sync: false   # set in the Render dashboard; at least 8 characters
+      - key: INGEST_TOKEN
+        sync: false   # set in the Render dashboard before real trackers or phones use it
+      - key: SIM_COUNT
+        value: "10"   # simulated taxis for demos; set to 0 once real vehicles report
