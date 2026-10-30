@@ -252,7 +252,7 @@ function driverLogout(req, res) {
 function driverMe(req, res) {
   const d = requireDriver(req, res);
   if (!d) return;
-  const row = fleet.vehicleStats().find((v) => v.id === d.taxiId);
+  const row = fleet.vehicleStat(d.taxiId);
   const live = row
     ? { status: row.status, speed: row.speed, distanceKm: row.distanceKm, trips: row.trips, idleMin: row.idleMin, ts: row.ts, historyMinutes: LIMITS.historyMs / 60_000 }
     : null;
@@ -272,6 +272,7 @@ async function driverPing(req, res) {
   }
   const now = Date.now();
   const prev = fleet.get(d.taxiId);
+  const wasOnTrip = activePhones.get(d.taxiId)?.onTrip;
   const lat = typeof b.lat === 'number' ? b.lat : (prev?.lat ?? CENTER.lat);
   const lng = typeof b.lng === 'number' ? b.lng : (prev?.lng ?? CENTER.lng);
   const ts = typeof b.ts === 'number' && (!prev || b.ts >= prev.ts) ? b.ts : now;
@@ -284,8 +285,11 @@ async function driverPing(req, res) {
     onTrip: result.value.onTrip,
     updatedAt: now,
   });
-  stats.sample(now);
-  broadcast('live', () => ({ type: 'stats', data: liveStats() }));
+  // Stats go out on their timer, not per ping. A passenger pick-up or drop-off is pushed at once
+  // so the dashboard shows it without waiting; that happens a few times an hour per taxi.
+  if (wasOnTrip !== undefined && wasOnTrip !== result.value.onTrip) {
+    broadcast('live', () => ({ type: 'stats', data: liveStats() }));
+  }
   send(res, 202, { accepted: true, stale: Boolean(result.stale) });
 }
 

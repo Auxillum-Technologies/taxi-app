@@ -71,6 +71,7 @@ export function createFleet({ limits = LIMITS } = {}) {
 
     const stationary = p.speed < 1;
     const stoppedSince = stationary ? (prev?.stoppedSince ?? p.ts) : null;
+    const last = prev?.history.at(-1);
     const v = {
       id: p.vehicleId,
       lat: p.lat,
@@ -83,12 +84,18 @@ export function createFleet({ limits = LIMITS } = {}) {
       stoppedSince,
       history: prev?.history ?? [],
       tripStarts: prev?.tripStarts ?? [], // ms of each free -> on-trip change, last 24 h
+      // Distance along `history`, kept as a running total so a stats read does not walk every sample.
+      distanceKm: prev?.distanceKm ?? 0,
     };
     // A trip starts when a known vehicle switches from free to on trip.
     if (prev && !prev.onTrip && p.onTrip) v.tripStarts.push(p.ts);
     while (v.tripStarts.length && v.tripStarts[0] < now - limits.tripWindowMs) v.tripStarts.shift();
-    v.history.push({ ts: p.ts, lat: p.lat, lng: p.lng, speed: p.speed, heading: p.heading, onTrip: p.onTrip });
-    trimHistory(v.history, now, limits);
+    const sample = { ts: p.ts, lat: p.lat, lng: p.lng, speed: p.speed, heading: p.heading, onTrip: p.onTrip };
+    if (last) v.distanceKm += segmentKm(last, sample, limits.maxJumpKm);
+    v.history.push(sample);
+    v.distanceKm -= trimHistory(v.history, now, limits);
+    // Start again from zero with one sample left, so rounding errors cannot build up.
+    if (v.history.length < 2 || v.distanceKm < 0) v.distanceKm = 0;
     vehicles.set(p.vehicleId, v);
     version++;
     return { ok: true, value: v };
@@ -165,20 +172,33 @@ export function createFleet({ limits = LIMITS } = {}) {
   // Per-taxi rows for the dashboard table.
   function vehicleStats(now = Date.now()) {
     forget(now);
-    return [...vehicles.values()].map((v) => {
-      const d = describe(v, now);
-      return {
-        id: v.id,
-        status: d.status,
-        speed: v.speed,
-        source: v.source,
-        alerts: d.alerts.map((a) => a.type),
-        distanceKm: round(pathKm(v.history, limits.maxJumpKm), 2),
-        trips: v.tripStarts.length,
-        idleMin: v.stoppedSince && d.status !== 'offline' ? Math.floor((now - v.stoppedSince) / 60_000) : 0,
-        ts: v.ts,
-      };
-    });
+    return [...vehicles.values()].map((v) => statsRow(v, now));
+  }
+
+  // One taxi's dashboard row, or null when it is unknown or forgotten. Cost does not grow with the fleet.
+  function vehicleStat(id, now = Date.now()) {
+    const v = vehicles.get(id);
+    if (!v) return null;
+    if (now - v.ts > limits.forgetMs) {
+      vehicles.delete(id);
+      return null;
+    }
+    return statsRow(v, now);
+  }
+
+  function statsRow(v, now) {
+    const d = describe(v, now);
+    return {
+      id: v.id,
+      status: d.status,
+      speed: v.speed,
+      source: v.source,
+      alerts: d.alerts.map((a) => a.type),
+      distanceKm: round(v.distanceKm, 2),
+      trips: v.tripStarts.length,
+      idleMin: v.stoppedSince && d.status !== 'offline' ? Math.floor((now - v.stoppedSince) / 60_000) : 0,
+      ts: v.ts,
+    };
   }
 
   // Slow zones from the fleet's own speeds. Taxis parked for the whole window are left out,
@@ -231,6 +251,7 @@ export function createFleet({ limits = LIMITS } = {}) {
     get,
     tripsSince,
     vehicleStats,
+    vehicleStat,
     congestion,
     snapshot,
     snapshotAt,
@@ -260,20 +281,21 @@ function haversineKm(a, b) {
   return 2 * 6371 * Math.asin(Math.sqrt(s));
 }
 
-// Distance along a history, skipping jumps longer than maxJumpKm (bad GPS fixes).
-function pathKm(history, maxJumpKm) {
-  let km = 0;
-  for (let i = 1; i < history.length; i++) {
-    const d = haversineKm(history[i - 1], history[i]);
-    if (d <= maxJumpKm) km += d;
-  }
-  return km;
+// Distance between two samples, or 0 for a jump longer than maxJumpKm (a bad GPS fix).
+function segmentKm(a, b, maxJumpKm) {
+  const d = haversineKm(a, b);
+  return d <= maxJumpKm ? d : 0;
 }
 
+// Drops samples older than the playback window. Returns the distance that left the window with them.
 function trimHistory(history, now, limits) {
   const cutoff = now - limits.historyMs;
   let drop = 0;
   while (drop < history.length && history[drop].ts < cutoff) drop++;
   if (history.length - drop > limits.maxSamples) drop = history.length - limits.maxSamples;
-  if (drop > 0) history.splice(0, drop);
+  if (drop === 0) return 0;
+  let km = 0;
+  for (let i = 1; i <= drop && i < history.length; i++) km += segmentKm(history[i - 1], history[i], limits.maxJumpKm);
+  history.splice(0, drop);
+  return km;
 }
