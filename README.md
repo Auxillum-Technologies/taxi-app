@@ -2,9 +2,9 @@
 
 A realtime 3D map of a taxi fleet. Positions come from GPS trackers and driver phones over HTTP. A simulated fleet runs alongside for testing.
 
-- 3D taxis on a pitched, tilted map. Status colors: free (mint), on trip (amber), offline (grey). Alerts add a red ring.
+- 3D taxis on a pitched, tilted map. Status colors: free (mint), on trip (amber), phone asleep (indigo), offline (grey). Alerts add a red ring.
 - Live list with search and status filters. Click a taxi to fly to it.
-- Alerts: speeding (above 90 km/h), stopped on a trip for more than 5 minutes, no signal for more than 60 seconds.
+- Alerts: speeding (above 90 km/h), stopped on a trip for more than 5 minutes, no signal for more than 60 seconds, and phone asleep (a driver phone that is still sharing but sent no GPS fix for more than 60 seconds).
 - Trails behind each taxi, and a replay slider to see positions up to 30 minutes ago.
 - **Sign-in** (`/`): one screen with an Owner / Driver choice. The map, dashboard and desk open only for the owner; drivers go to their own page.
 - **Owner desk** (Desk button): add and edit drivers (name, PIN, taxi ID, plate, make and model, body number, franchise number and expiry), reset a PIN, and handle older driver reports.
@@ -92,6 +92,12 @@ Either way, send the tracker model and protocol document before building the dec
 ### Driver phones and accounts
 
 The owner creates each driver in the **Desk**: full name, a 4-6 digit PIN, the taxi ID, and the taxi's details. The driver signs in at `/?as=driver` with that name (capital letters and extra spaces do not matter) and the PIN, lands on `/driver.html`, and taps **Start sharing**. Names must be unique, because the name is the sign-in. Changing a PIN signs the driver out. The page posts each GPS fix at most once every 3 seconds, and the server files it under that driver's taxi ID, so a phone cannot report for another taxi. Browsers only give location on **https** pages (or localhost), so deploy behind TLS before drivers use it on real phones.
+
+Browsers stop GPS when the phone screen locks or the page goes to the background.
+The server does not fake fresh pings for a quiet phone.
+It keeps the time of the last real fix, and after 60 seconds without a fix the owner sees the taxi as **Phone asleep** with the age of that fix.
+The taxi shows as **Offline** only when the driver taps **Stop sharing** or signs out.
+The driver page shows a warning with a **Resume sharing** button when sharing is off or GPS has not updated for a minute, so drivers keep the page open with the screen on while they drive.
 
 Driver reports and messages are no longer on the driver page. Their endpoints still work, and the desk still lists past reports.
 
