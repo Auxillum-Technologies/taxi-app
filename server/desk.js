@@ -185,7 +185,9 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS, 
     const s = sessions.get(hash);
     if (!s || !sessions.delete(hash)) return false;
     const d = s.role === 'driver' && drivers.get(s.driverId);
-    if (d) onDriverOff(d.taxiId);
+    const t = now();
+    const stillIn = [...sessions.values()].some((o) => o.driverId === s.driverId && o.expires >= t);
+    if (d && !stillIn) onDriverOff(d.taxiId);
     return true;
   }
 

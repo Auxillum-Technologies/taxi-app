@@ -403,3 +403,27 @@ test('a driver session the server ends stops that taxi sharing; the move to a ne
   assert.deepEqual(off, ['TX-050'], 'session expiry');
   assert.equal(desk.driverFor(juanToken), null);
 });
+
+test('a driver signed in on two phones keeps sharing until the last session ends', async () => {
+  const c = clock();
+  const off = [];
+  const desk = await newDesk({ now: c.now, onDriverOff: (taxiId) => off.push(taxiId) });
+  const juan = await addDriver(desk);
+  const signIn = async () => (await desk.driverLogin({ name: 'Juan Dela Cruz', pin: '482913', key: 'k' })).value.token;
+
+  const a = await signIn();
+  c.tick(3 * 60 * 60_000);
+  const b = await signIn();
+  c.tick(DESK_LIMITS.sessionMs - 3 * 60 * 60_000 + 1);
+  assert.equal(desk.driverFor(a), null, 'phone A expired');
+  assert.ok(desk.driverFor(b), 'phone B is still signed in');
+  assert.deepEqual(off, [], 'expiry of one phone keeps the taxi sharing');
+
+  const c2 = await signIn();
+  desk.closeSession(c2);
+  assert.deepEqual(off, [], 'sign-out on one phone keeps the taxi sharing');
+
+  await signIn();
+  await desk.updateDriver(juan.id, { pin: '7777' });
+  assert.deepEqual(off, ['TX-042'], 'a PIN reset ends every session and stops sharing once');
+});
