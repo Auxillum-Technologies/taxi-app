@@ -27,7 +27,6 @@
   --radius: 14px;
   --radius-sm: 10px;
   --gutter: 16px;
-  --topbar-h: 64px;
 
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-size: 16px;
@@ -122,6 +121,8 @@ h3 {
 
 .app {
   position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
   width: 100%;
 }
@@ -134,12 +135,10 @@ h3 {
 }
 
 .topbar {
-  position: absolute;
+  position: relative;
   z-index: 5;
-  top: 12px;
-  left: var(--gutter);
-  right: var(--gutter);
-  min-height: var(--topbar-h);
+  margin: 12px var(--gutter);
+  min-height: 64px;
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
@@ -312,8 +311,10 @@ input[type="search"]::placeholder {
 /* ---------- map HUD ---------- */
 
 .hud {
-  position: absolute;
-  inset: 0;
+  position: relative;
+  grid-area: 2 / 1;
+  min-height: 0;
+  min-width: 0;
   pointer-events: none;
   --mx: 0;
   --my: 0;
@@ -339,7 +340,7 @@ input[type="search"]::placeholder {
 
 .side {
   position: absolute;
-  top: calc(12px + var(--topbar-h) + 12px);
+  top: 0;
   left: var(--gutter);
   bottom: 116px;
   width: 300px;
@@ -377,7 +378,7 @@ input[type="search"]::placeholder {
 .side > * {
   flex: none;
 }
-.side > .vehicles {
+.side > .vehicle-list-content {
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -428,7 +429,7 @@ input[type="search"]::placeholder {
 
 .card {
   position: absolute;
-  top: calc(12px + var(--topbar-h) + 12px);
+  top: 0;
   right: var(--gutter);
   width: 290px;
   padding: 12px 14px 14px 16px;
@@ -521,12 +522,14 @@ input[type="search"]::placeholder {
 /* ---------- dashboard ---------- */
 
 .dashboard-wrap {
-  position: absolute;
-  inset: 0;
+  position: relative;
+  grid-area: 2 / 1;
+  min-height: 0;
+  min-width: 0;
   z-index: 4;
   overflow-y: auto;
   background: var(--bg);
-  padding: calc(12px + var(--topbar-h) + 20px) var(--gutter) 32px;
+  padding: 8px var(--gutter) 32px;
 }
 
 .dashboard {
@@ -1207,6 +1210,12 @@ input[type="search"]::placeholder {
   .counts {
     display: none;
   }
+  .bottom {
+    left: var(--gutter);
+  }
+  .replay {
+    flex-wrap: wrap;
+  }
 }
 
 /* ---------- phone ---------- */
@@ -1214,13 +1223,27 @@ input[type="search"]::placeholder {
 @media (max-width: 760px) {
   :root {
     --gutter: 10px;
-    --topbar-h: 56px;
   }
   .topbar {
-    top: 8px;
-    grid-template-columns: 1fr auto auto;
+    margin: 8px var(--gutter);
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px;
     padding: 6px 6px 6px 12px;
+  }
+  .brand {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .tabs {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    display: flex;
+  }
+  .tab {
+    flex: 1;
+  }
+  .top-actions {
+    gap: 8px;
   }
   .brand h1 {
     font-size: var(--fs-md);
@@ -1253,12 +1276,24 @@ input[type="search"]::placeholder {
     width: 44px;
   }
 
+  /* Separate grid cells keep details, playback and the vehicle sheet apart,
+     including in landscape and with enlarged text. */
+  .hud {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 64px;
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 0 var(--gutter) var(--gutter);
+  }
+  .hud[hidden] {
+    display: none;
+  }
   .side {
-    top: auto;
-    left: var(--gutter);
-    right: var(--gutter);
-    bottom: var(--gutter);
+    position: relative;
+    inset: auto;
+    grid-area: 2 / 1 / 3 / -1;
     width: auto;
+    min-height: 0;
     max-height: 40vh;
     padding: 10px;
   }
@@ -1277,6 +1312,12 @@ input[type="search"]::placeholder {
   .vehicle-list-content {
     flex: 1 1 auto;
   }
+  .side > .vehicle-list-content {
+    overflow-y: auto;
+  }
+  .vehicle-list-content > .vehicles {
+    min-height: 88px;
+  }
   .side.list-collapsed {
     max-height: none;
     padding: 6px 10px;
@@ -1289,22 +1330,30 @@ input[type="search"]::placeholder {
     flex: none;
   }
   .card {
-    top: calc(8px + var(--topbar-h) + 8px);
-    left: var(--gutter);
-    right: calc(var(--gutter) + 64px + 8px);
+    position: relative;
+    inset: auto;
+    grid-area: 1 / 1;
+    align-self: start;
     width: auto;
+    max-height: 100%;
+    overflow-y: auto;
+    overflow-wrap: anywhere;
   }
   /* Vertical Live / replay / traffic rail on the right edge in phone orientation. */
   .bottom {
-    top: calc(8px + var(--topbar-h) + 8px);
-    right: var(--gutter);
-    left: auto;
-    bottom: auto;
+    position: relative;
+    inset: auto;
+    grid-area: 1 / 2;
+    align-self: start;
+    max-height: 100%;
+    overflow-y: auto;
+    overflow-wrap: anywhere;
     width: 64px;
     padding: 8px 6px;
   }
   .replay {
     flex-direction: column;
+    flex-wrap: nowrap;
     align-items: center;
     gap: 8px;
   }
@@ -1359,8 +1408,8 @@ input[type="search"]::placeholder {
     display: none;
   }
 
-  .dashboard-wrap {
-    padding-top: calc(8px + var(--topbar-h) + 14px);
+  .panel[class*="depth-"] {
+    transform: none;
   }
   .dash-title {
     font-size: var(--fs-lg);
