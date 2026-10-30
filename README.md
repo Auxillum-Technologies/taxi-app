@@ -96,7 +96,7 @@ The owner creates each driver in the **Desk**: full name, a 4-6 digit PIN, the t
 Browsers stop GPS when the phone screen locks or the page goes to the background.
 The server does not fake fresh pings for a quiet phone.
 It keeps the time of the last real fix, and after 60 seconds without a fix the owner sees the taxi as **Phone asleep** with the age of that fix.
-The taxi shows as **Offline** only when the driver taps **Stop sharing** or signs out.
+The taxi shows as **Offline** only when sharing stops: the driver taps **Stop sharing** or signs out, the owner changes the driver's PIN, taxi ID (for the old ID) or removes the driver, or the driver's last session expires.
 The driver page shows a warning with a **Resume sharing** button when sharing is off or GPS has not updated for a minute, so drivers keep the page open with the screen on while they drive.
 
 Driver reports and messages are no longer on the driver page. Their endpoints still work, and the desk still lists past reports.
