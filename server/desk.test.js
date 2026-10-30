@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDesk, hashPassword, verifyPassword, DESK_LIMITS } from './desk.js';
@@ -131,6 +131,7 @@ test('a driver saved before PIN sign-in cannot sign in until the owner sets a PI
     assert.equal((await desk.driverLogin({ name: 'Pedro Reyes', pin: '1234', key: 'k' })).ok, false);
     assert.equal((await desk.updateDriver('old-1', { pin: '2468' })).ok, true);
     assert.equal((await desk.driverLogin({ name: 'Pedro Reyes', pin: '2468', key: 'k' })).ok, true);
+    desk.flush();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -261,6 +262,108 @@ test('state survives a restart when a data file is given', async () => {
     assert.equal(second.listDrivers()[0].taxi.plate, 'LAB 1234');
     assert.equal(second.inboxFor(d.id)[0].text, 'Back to base at 6');
     assert.equal((await second.driverLogin({ name: 'Juan Dela Cruz', pin: '482913', key: 'k' })).ok, true);
+    second.flush();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A deploy restarts the server; signed-in phones must keep sharing without typing the PIN again.
+test('sign-ins survive a restart, and the data file keeps only token hashes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'desk-test-'));
+  const file = join(dir, 'desk.json');
+  try {
+    const first = await newDesk({ file });
+    const d = await addDriver(first);
+    const owner = (await first.ownerLogin({ password: 'owner-secret-1', key: 'k' })).value.token;
+    const driver = (await first.driverLogin({ name: 'Juan Dela Cruz', pin: '482913', key: 'k' })).value.token;
+    first.flush();
+
+    const saved = readFileSync(file, 'utf8');
+    assert.equal(saved.includes(owner), false, 'raw owner token is not stored');
+    assert.equal(saved.includes(driver), false, 'raw driver token is not stored');
+
+    const second = await newDesk({ file });
+    assert.ok(second.sessionFor(owner, 'owner'), 'owner stays signed in');
+    assert.equal(second.driverFor(driver)?.id, d.id, 'driver stays signed in');
+    assert.equal(second.sessionFor(driver, 'owner'), null, 'role still checked');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('sign-out, PIN reset and driver removal still end sessions across a restart', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'desk-test-'));
+  const file = join(dir, 'desk.json');
+  try {
+    const first = await newDesk({ file });
+    const juan = await addDriver(first);
+    const maria = await addDriver(first, { name: 'Maria Santos', taxiId: 'TX-043', pin: '1234' });
+    const pedro = await addDriver(first, { name: 'Pedro Reyes', taxiId: 'TX-044', pin: '5678' });
+    const owner = (await first.ownerLogin({ password: 'owner-secret-1', key: 'k' })).value.token;
+    const juanToken = (await first.driverLogin({ name: 'Juan Dela Cruz', pin: '482913', key: 'k' })).value.token;
+    const mariaToken = (await first.driverLogin({ name: 'Maria Santos', pin: '1234', key: 'k' })).value.token;
+    const pedroToken = (await first.driverLogin({ name: 'Pedro Reyes', pin: '5678', key: 'k' })).value.token;
+    first.closeSession(owner);
+    await first.updateDriver(juan.id, { pin: '111111' });
+    first.removeDriver(maria.id);
+    first.flush();
+
+    const second = await newDesk({ file });
+    assert.equal(second.sessionFor(owner, 'owner'), null, 'signed-out owner');
+    assert.equal(second.driverFor(juanToken), null, 'PIN reset');
+    assert.equal(second.driverFor(mariaToken), null, 'removed driver');
+    assert.equal(second.driverFor(pedroToken)?.id, pedro.id, 'untouched driver keeps the sign-in');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('expired sessions are pruned from the data file and do not come back', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'desk-test-'));
+  const file = join(dir, 'desk.json');
+  const c = clock();
+  try {
+    const first = await newDesk({ file, now: c.now });
+    await addDriver(first);
+    const old = (await first.driverLogin({ name: 'Juan Dela Cruz', pin: '482913', key: 'k' })).value.token;
+    c.tick(DESK_LIMITS.sessionMs - 1000);
+    const fresh = (await first.ownerLogin({ password: 'owner-secret-1', key: 'k' })).value.token;
+    c.tick(2000); // `old` is now past its expiry, `fresh` is not
+    first.flush();
+
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).sessions.length, 1, 'only the live session is saved');
+    const second = await newDesk({ file, now: c.now });
+    assert.equal(second.driverFor(old), null);
+    assert.ok(second.sessionFor(fresh, 'owner'));
+    c.tick(DESK_LIMITS.sessionMs);
+    assert.equal(second.sessionFor(fresh, 'owner'), null, 'restored sessions still expire');
+    second.flush();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a new owner password ends owner sessions saved before the restart', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'desk-test-'));
+  const file = join(dir, 'desk.json');
+  try {
+    const first = await newDesk({ file });
+    const owner = (await first.ownerLogin({ password: 'owner-secret-1', key: 'k' })).value.token;
+    first.flush();
+
+    const same = await newDesk({ file });
+    assert.ok(same.sessionFor(owner, 'owner'), 'same password keeps the sign-in');
+    same.flush();
+
+    const changed = createDesk({ file });
+    await changed.setOwnerPassword('owner-secret-2');
+    assert.equal(changed.sessionFor(owner, 'owner'), null);
+    changed.flush();
+    const after = createDesk({ file });
+    await after.setOwnerPassword('owner-secret-2');
+    assert.equal(after.sessionFor(owner, 'owner'), null, 'revocation is saved');
+    after.flush();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

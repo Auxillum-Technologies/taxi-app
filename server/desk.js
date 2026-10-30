@@ -1,7 +1,8 @@
 // Driver accounts (name + PIN sign-in, taxi details), owner-to-driver messages and driver field reports.
-// Kept in memory. With a file path it also saves one JSON file so it survives restarts.
+// Kept in memory. With a file path it also saves one JSON file so it survives restarts,
+// sign-ins included: the file keeps a SHA-256 hash of each session token, never the token.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { randomBytes, randomUUID, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { dirname } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -83,6 +84,11 @@ function checkTaxi(input, base = emptyTaxi()) {
   return { taxi };
 }
 
+// Session tokens are 32 random bytes, so a fast hash is enough to make a leaked data file useless.
+function tokenHash(token) {
+  return createHash('sha256').update(token).digest('hex');
+}
+
 function checkPin(pin) {
   return typeof pin === 'string' && PIN.test(pin) ? null : 'PIN must be 4 to 6 digits';
 }
@@ -99,7 +105,7 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS }
   const messages = []; // { id, to: driverId | 'all', text, at, readBy: [driverId] }
   const reports = []; // { id, driverId, driverName, taxiId, type, text, lat, lng, status, at, updatedAt }
   const trips = []; // { id, driverId, driverName, taxiId, startedAt, endedAt, durationSec, distanceKm, at }
-  const sessions = new Map(); // token -> { role, driverId?, expires }
+  const sessions = new Map(); // tokenHash(token) -> { role, driverId?, expires }
   const failures = new Map(); // client key -> { count, since }
   const nameFailures = new Map(); // nameKey -> { count, since }
   const lastReportAt = new Map(); // driverId -> ms
@@ -122,13 +128,17 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS }
     messages.push(...(data.messages ?? []));
     reports.push(...(data.reports ?? []));
     trips.push(...(data.trips ?? []));
+    for (const { hash, ...s } of data.sessions ?? []) if (s.expires >= now()) sessions.set(hash, s);
+    ownerHash = data.ownerHash ?? null;
   }
 
   function save() {
     if (!file) return;
     mkdirSync(dirname(file), { recursive: true });
     const tmp = `${file}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ version: 1, drivers: [...drivers.values()], messages, reports, trips }, null, 2));
+    pruneSessions();
+    const saved = [...sessions].map(([hash, s]) => ({ hash, ...s }));
+    writeFileSync(tmp, JSON.stringify({ version: 1, drivers: [...drivers.values()], messages, reports, trips, sessions: saved, ownerHash }, null, 2));
     renameSync(tmp, file);
   }
 
@@ -138,10 +148,15 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS }
     save();
   }
 
-  function changed() {
-    version++;
+  // Saves soon. Sign-ins use this alone: they are not desk data, so clients need not refetch.
+  function persist() {
     if (!file || saveTimer) return;
     saveTimer = setTimeout(flush, 200); // batch bursts of writes into one save
+  }
+
+  function changed() {
+    version++;
+    persist();
   }
 
   // ---------- sign-in and sessions ----------
@@ -164,25 +179,41 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS }
     else f.count++;
   }
 
+  function pruneSessions() {
+    const t = now();
+    for (const [hash, s] of sessions) if (s.expires < t) sessions.delete(hash);
+  }
+
+  // Ends every session that matches; saves when any ended.
+  function endSessions(match) {
+    let ended = false;
+    for (const [hash, s] of sessions) if (match(s) && sessions.delete(hash)) ended = true;
+    if (ended) persist();
+  }
+
   function openSession(session) {
     const token = randomBytes(32).toString('base64url');
-    sessions.set(token, { ...session, expires: now() + limits.sessionMs });
+    pruneSessions();
+    sessions.set(tokenHash(token), { ...session, expires: now() + limits.sessionMs });
+    persist();
     return token;
   }
 
   function sessionFor(token, role) {
     if (typeof token !== 'string' || !token) return null;
-    const s = sessions.get(token);
+    const hash = tokenHash(token);
+    const s = sessions.get(hash);
     if (!s) return null;
     if (s.expires < now()) {
-      sessions.delete(token);
+      sessions.delete(hash);
+      persist();
       return null;
     }
     return role && s.role !== role ? null : s;
   }
 
   function closeSession(token) {
-    sessions.delete(token);
+    if (typeof token === 'string' && token && sessions.delete(tokenHash(token))) persist();
   }
 
   // Returns the driver record for a valid driver session, or null (also after the driver was removed).
@@ -191,10 +222,14 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS }
     return (s && drivers.get(s.driverId)) || null;
   }
 
+  // Keeps owner sign-ins from before a restart only while the password is the same.
   async function setOwnerPassword(password) {
     const err = checkPassword(password);
     if (err) throw new Error(`OWNER_PASSWORD: ${err}`);
+    if (ownerHash && (await verifyPassword(password, ownerHash))) return;
     ownerHash = await hashPassword(password);
+    endSessions((s) => s.role === 'owner');
+    persist();
   }
 
   async function ownerLogin({ password, key }) {
@@ -286,7 +321,7 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS }
       const pinErr = checkPin(input.pin);
       if (pinErr) return fail(pinErr);
       pinHash = await hashPassword(input.pin);
-      for (const [token, s] of sessions) if (s.driverId === id) sessions.delete(token);
+      endSessions((s) => s.driverId === id);
       nameFailures.delete(nameKey(d.name));
     }
     Object.assign(d, { name, taxiId, taxi, pinHash });
@@ -298,7 +333,7 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS }
 
   function removeDriver(id) {
     if (!drivers.delete(id)) return false;
-    for (const [token, s] of sessions) if (s.driverId === id) sessions.delete(token);
+    endSessions((s) => s.driverId === id);
     changed();
     return true;
   }

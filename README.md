@@ -32,7 +32,7 @@ npm run build && npm start   # serves the built UI and the API on :8787
 ```
 
 Deploy on Railway: `railway.json` sets the build, start command, and health check.
-Add a volume mounted at `/data` and set `DATA_FILE=/data/desk.json`, or desk data is lost on each deploy.
+Add a volume mounted at `/data` and set `DATA_FILE=/data/desk.json`, or desk data and sign-ins are lost on each deploy.
 Set `OWNER_PASSWORD`, `INGEST_TOKEN`, and `SIM_COUNT` in the Railway dashboard.
 
 ### Configuration (environment variables)
@@ -44,7 +44,7 @@ Set `OWNER_PASSWORD`, `INGEST_TOKEN`, and `SIM_COUNT` in the Railway dashboard.
 | `CENTER_LAT` / `CENTER_LNG` | `7.07` / `125.61` (downtown Davao City) | Center of the simulated area and the map's start view |
 | `INGEST_TOKEN` | empty | If set, ingest requires `Authorization: Bearer <token>`. **Set this before exposing the server** |
 | `OWNER_PASSWORD` | `owner123` | Password for the owner desk (8+ characters). **Change it before exposing the server**; the default is logged as a warning at startup |
-| `DATA_FILE` | `data/desk.json` | Where driver accounts, messages and reports are saved. Git-ignored |
+| `DATA_FILE` | `data/desk.json` | Where driver accounts, messages, reports and sign-ins are saved. Git-ignored |
 | `API_ORIGIN` | `http://localhost:8787` | Where the Vite dev server proxies `/api` and `/ws` |
 
 Without `INGEST_TOKEN`, the server logs a warning and accepts pings from anyone who can reach the port.
@@ -105,7 +105,7 @@ Driver endpoints (`Authorization: Bearer <driver token>` from `POST /api/driver/
 
 Live updates: the map and dashboard use one WebSocket (`/ws`). Its first message must be `{"type": "auth", "token": "<owner token>"}` (the token never goes in the URL); without it the server closes the socket with code 4401. It carries fleet snapshots (up to 4 per second, only when something changed) and dashboard stats every 5 seconds. Each snapshot includes a `deskVersion` number, and the owner desk refetches when it changes. Driver phones connect to `/ws?feed=desk`, which sends only a small "something changed" notice and never fleet data, so it stays light on mobile data. Both pages also poll every 60 seconds in case the socket drops.
 
-Security notes: the owner password and driver PINs are stored as scrypt hashes; sign-in is limited to 10 failed attempts per address per 15 minutes, and a driver name locks for 15 minutes after 5 wrong PINs (a 4-digit PIN has only 10,000 values, so prefer 6 digits); sessions last 12 hours and live in server memory (drivers sign in again after a restart). The owner token is kept in the tab's session storage and driver tokens in the phone's local storage. Public map data includes driver report text and the taxi ID, but never driver names. Run the server behind HTTPS before it is used by drivers or the owner from outside your network.
+Security notes: the owner password and driver PINs are stored as scrypt hashes; sign-in is limited to 10 failed attempts per address per 15 minutes, and a driver name locks for 15 minutes after 5 wrong PINs (a 4-digit PIN has only 10,000 values, so prefer 6 digits); sessions last 12 hours and are saved to `DATA_FILE` as SHA-256 hashes of the tokens, so sign-ins survive restarts and deploys (owner sign-ins end when `OWNER_PASSWORD` changes). The owner token is kept in the tab's session storage and driver tokens in the phone's local storage. Public map data includes driver report text and the taxi ID, but never driver names. Run the server behind HTTPS before it is used by drivers or the owner from outside your network.
 
 ## Architecture
 
@@ -140,7 +140,7 @@ npm test     # store validation, out-of-order pings, alerts, playback; accounts,
 - The app bundle is about 1.9 MB (507 KB gzipped) plus MapLibre's 520 KB worker. MapLibre and three.js dominate it, which misses a 250 KB gzip budget. Code-splitting the map is the next step if load time on mobile data matters.
 - The map uses OpenFreeMap vector tiles (no API key). Check its terms before a commercial launch.
 - Tested in headless Chrome at 1440×900 and 390×844. Not yet tested on a real phone, on Safari, or under load with hundreds of taxis.
-- Accounts and messages are a single JSON file with no backup or migrations. Sessions are in memory only.
+- Accounts, messages and sign-ins are a single JSON file with no backup or migrations.
 - Dashboard history (charts, trips, distance) covers only the time since the server started, because nothing is stored on disk except accounts, messages and reports.
 - Taxi markers are small at city zoom. Zoom in to read a taxi's ID; the list is the way to read labels.
 
