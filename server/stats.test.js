@@ -126,3 +126,37 @@ test('stats summary reports KPIs and keeps a bounded series', () => {
   assert.equal(s.kpis.avgMovingKmh, 30, 'stopped taxis do not drag the average down');
   assert.equal(s.vehicles.length, 2);
 });
+
+test('running distance matches the full path as old samples leave the 30-minute window', () => {
+  const fleet = createFleet();
+  const path = [];
+  // 40 minutes at one ping per 10 s, with a GPS jump every 50th ping.
+  for (let s = 0; s <= 2400; s += 10) {
+    const lat = 7.19 + s * 1e-5 + (s % 500 === 0 && s ? 0.05 : 0);
+    feed(fleet, 'TX-1', s, { lat, speed: 30 });
+    path.push({ ts: T0 + s * 1000, lat, lng: 125.45 });
+  }
+  const now = T0 + 2400 * 1000;
+  const kept = path.filter((p) => p.ts >= now - LIMITS.historyMs);
+  let expected = 0;
+  for (let i = 1; i < kept.length; i++) {
+    const rad = Math.PI / 180;
+    const a = kept[i - 1];
+    const b = kept[i];
+    const h = Math.sin(((b.lat - a.lat) * rad) / 2) ** 2;
+    const d = 2 * 6371 * Math.asin(Math.sqrt(h));
+    if (d <= LIMITS.maxJumpKm) expected += d;
+  }
+  assert.equal(fleet.vehicleStats(now)[0].distanceKm, Math.round(expected * 100) / 100);
+});
+
+test("vehicleStat returns one taxi's dashboard row, and null once it is forgotten", () => {
+  const fleet = createFleet();
+  feed(fleet, 'TX-1', 0, { speed: 20, onTrip: true });
+  feed(fleet, 'TX-1', 10, { lat: 7.191, speed: 20, onTrip: true });
+  feed(fleet, 'TX-2', 10, { speed: 0 });
+  const now = T0 + 10_000;
+  assert.deepEqual(fleet.vehicleStat('TX-1', now), fleet.vehicleStats(now).find((v) => v.id === 'TX-1'));
+  assert.equal(fleet.vehicleStat('NOPE', now), null);
+  assert.equal(fleet.vehicleStat('TX-1', now + LIMITS.forgetMs + 20_000), null);
+});

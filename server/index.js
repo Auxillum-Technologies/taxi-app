@@ -252,7 +252,7 @@ function driverLogout(req, res) {
 function driverMe(req, res) {
   const d = requireDriver(req, res);
   if (!d) return;
-  const row = fleet.vehicleStats().find((v) => v.id === d.taxiId);
+  const row = fleet.vehicleStat(d.taxiId);
   const live = row
     ? { status: row.status, speed: row.speed, distanceKm: row.distanceKm, trips: row.trips, idleMin: row.idleMin, ts: row.ts, historyMinutes: LIMITS.historyMs / 60_000 }
     : null;
@@ -284,8 +284,7 @@ async function driverPing(req, res) {
     onTrip: result.value.onTrip,
     updatedAt: now,
   });
-  stats.sample(now);
-  broadcast('live', () => ({ type: 'stats', data: liveStats() }));
+  // No stats work here: the series samples on its own timer and stats go out every STATS_PUSH_MS.
   send(res, 202, { accepted: true, stale: Boolean(result.stale) });
 }
 

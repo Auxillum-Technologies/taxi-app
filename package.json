@@ -13,7 +13,7 @@
     "dev": "echo 'Run in two terminals: npm run dev:server and npm run dev:client' && exit 0",
     "build": "vite build",
     "start": "node server/index.js",
-    "test": "node --test server/store.test.js server/desk.test.js server/stats.test.js"
+    "test": "node --test server/store.test.js server/desk.test.js server/stats.test.js server/index.test.js"
   },
   "dependencies": {
     "maplibre-gl": "^6.16.0",
