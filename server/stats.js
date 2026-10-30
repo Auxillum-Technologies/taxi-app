@@ -14,6 +14,7 @@ export function createStats(fleet, { now = Date.now, opts = STATS } = {}) {
   function kpis(vehicles, zones, t) {
     let free = 0;
     let onTrip = 0;
+    let asleep = 0;
     let offline = 0;
     let alerts = 0;
     let moving = 0;
@@ -21,9 +22,10 @@ export function createStats(fleet, { now = Date.now, opts = STATS } = {}) {
     for (const v of vehicles) {
       if (v.status === 'free') free++;
       else if (v.status === 'on_trip') onTrip++;
+      else if (v.status === 'asleep') asleep++;
       else offline++;
       if (v.alerts.length) alerts++;
-      if (v.status !== 'offline' && v.speed >= opts.movingKmh) {
+      if ((v.status === 'free' || v.status === 'on_trip') && v.speed >= opts.movingKmh) {
         moving++;
         speedSum += v.speed;
       }
@@ -34,6 +36,7 @@ export function createStats(fleet, { now = Date.now, opts = STATS } = {}) {
       online,
       free,
       onTrip,
+      asleep,
       offline,
       alerts,
       moving,

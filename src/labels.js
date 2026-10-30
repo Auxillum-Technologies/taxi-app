@@ -21,8 +21,9 @@ export const REPORT_COLOR = {
 
 export const REPORT_STATUS_LABEL = { open: 'Open', acknowledged: 'Acknowledged', resolved: 'Resolved' };
 
-export const STATUS_LABEL = { free: 'Free', on_trip: 'On trip', offline: 'Offline' };
-export const STATUS_HEX = { free: '#15803d', on_trip: '#f59e0b', offline: '#94a3b8' };
+// 'asleep': a driver phone that is still sharing but has sent no GPS fix for over a minute.
+export const STATUS_LABEL = { free: 'Free', on_trip: 'On trip', asleep: 'Phone asleep', offline: 'Offline' };
+export const STATUS_HEX = { free: '#15803d', on_trip: '#f59e0b', asleep: '#4f46e5', offline: '#94a3b8' };
 
 // Slow-zone levels from the server's congestion grid.
 export const LEVEL_LABEL = { jam: 'Jam', slow: 'Slow', flowing: 'Flowing' };

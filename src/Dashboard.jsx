@@ -19,7 +19,7 @@ const STATUS_SERIES = [
   { key: 'onTrip', label: 'On trip', color: STATUS_HEX.on_trip },
 ];
 const SPEED_SERIES = [{ key: 'avgMovingKmh', label: 'Average moving speed', color: STATUS_HEX.free }];
-const STATUS_RANK = { on_trip: 0, free: 1, offline: 2 };
+const STATUS_RANK = { on_trip: 0, free: 1, asleep: 2, offline: 3 };
 
 const COLUMNS = [
   { key: 'id', label: 'Taxi' },
@@ -191,7 +191,11 @@ export default function Dashboard({ stats, reports, connected, onLocateVehicle, 
       </div>
 
       <dl className="kpis">
-        <Kpi label="Online" value={k.online} sub={`of ${k.total} taxis · ${k.offline} offline`} />
+        <Kpi
+          label="Online"
+          value={k.online}
+          sub={`of ${k.total} taxis · ${k.asleep ? `${k.asleep} phone asleep · ` : ''}${k.offline} offline`}
+        />
         <Kpi label="On trip" value={k.utilization * 100} suffix="%" sub={`${k.onTrip} taxis carrying passengers`} />
         <Kpi label="Moving speed" value={k.avgMovingKmh} decimals={1} suffix="km/h" sub={`average of ${k.moving} moving taxis`} />
         <Kpi label="Trips, last hour" value={k.tripsLastHour} sub="free → on trip changes" />
@@ -310,6 +314,7 @@ export default function Dashboard({ stats, reports, connected, onLocateVehicle, 
                     <span className="status">
                       <span className="swatch" style={{ background: STATUS_HEX[r.status] }} aria-hidden="true" />
                       {STATUS_LABEL[r.status]}
+                      {r.status === 'asleep' && <span className="muted"> · last fix {ago(r.ts)}</span>}
                     </span>
                   </td>
                   <td className="num">{Math.round(r.speed)}</td>
