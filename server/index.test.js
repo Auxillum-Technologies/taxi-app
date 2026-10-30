@@ -48,9 +48,22 @@ before(async () => {
   });
 });
 
-after(() => {
-  server?.kill('SIGTERM');
-  rmSync(dir, { recursive: true, force: true });
+// Waits for the server to exit so it stops writing desk.json before the folder is deleted.
+function stopServer(child, timeoutMs = 5000) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    child.kill('SIGTERM');
+  });
+}
+
+after(async () => {
+  await stopServer(server);
+  if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
 });
 
 async function signIn() {
