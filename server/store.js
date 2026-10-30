@@ -47,11 +47,13 @@ export function parsePing(input, now = Date.now()) {
   return { ok: true, value: { vehicleId, lat, lng, speed, heading, ts, onTrip } };
 }
 
-// When a phone's GPS fix was taken, on the server clock. The phone sends the fix age measured
+// When a driver phone's GPS fix was taken, on the server clock. The phone sends the fix age measured
 // on its own clock, so a phone whose clock is wrong still reports honest freshness.
 // Never in the future, never older than maxAgeMs, never before the previous fix (so it is not dropped as out of order).
-export function phoneFixTs(fixAgeMs, prevTs, now = Date.now()) {
-  const age = isNum(fixAgeMs) ? Math.min(Math.max(fixAgeMs, 0), LIMITS.maxAgeMs) : 0;
+// A ping without a fix (for example a passenger button tap) keeps the last fix time, so a quiet phone never looks fresh.
+export function phoneFixTs(body, prevTs, now = Date.now()) {
+  if (!isNum(body.lat) || !isNum(body.lng)) return prevTs ?? now;
+  const age = isNum(body.fixAgeMs) ? Math.min(Math.max(body.fixAgeMs, 0), LIMITS.maxAgeMs) : 0;
   return Math.max(now - age, prevTs ?? -Infinity);
 }
 

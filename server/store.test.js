@@ -122,14 +122,21 @@ test('a stop starts again after a gap with no fixes', () => {
   assert.ok(!v.alerts.some((a) => a.type === 'idle'), 'time asleep does not count as stopped');
 });
 
+// A ping body built the way public/driver.html builds it, on a phone whose clock is off by skewMs.
+function phoneBody(serverNow, skewMs, fixAgeOnPhoneMs) {
+  const deviceNow = serverNow + skewMs;
+  const posTimestamp = deviceNow - fixAgeOnPhoneMs;
+  return { lat: base.lat, lng: base.lng, speed: 30, heading: 90, onTrip: true, sharing: true, fixAgeMs: deviceNow - posTimestamp };
+}
+
 test('a phone with a wrong clock sending fresh fixes stays live, not asleep', () => {
   const f = createFleet();
   for (const skew of [-90_000, 90_000]) {
     const id = `PH${skew}`;
     for (let t = NOW; t <= NOW + 30_000; t += 3000) {
-      const deviceNow = t + skew;
-      const fixAgeMs = deviceNow - (deviceNow - 1000); // the fix is 1 s old on the phone's clock
-      const r = f.ingest({ ...base, vehicleId: id, ts: phoneFixTs(fixAgeMs, f.get(id)?.ts, t) }, 'driver-phone', t);
+      const ts = phoneFixTs(phoneBody(t, skew, 1000), f.get(id)?.ts, t);
+      assert.equal(ts, t - 1000, 'fix time is on the server clock');
+      const r = f.ingest({ ...base, vehicleId: id, ts }, 'driver-phone', t);
       assert.equal(r.ok, true);
       assert.equal(r.stale, undefined);
     }
@@ -138,11 +145,18 @@ test('a phone with a wrong clock sending fresh fixes stays live, not asleep', ()
   }
 });
 
+test('a ping without a fix keeps the last fix time', () => {
+  const tap = { onTrip: true, sharing: true };
+  assert.equal(phoneFixTs(tap, NOW - 90_000, NOW), NOW - 90_000);
+  assert.equal(phoneFixTs(tap, undefined, NOW), NOW);
+});
+
 test('phoneFixTs keeps the fix age honest and in order', () => {
-  assert.equal(phoneFixTs(5000, undefined, NOW), NOW - 5000);
-  assert.equal(phoneFixTs(-5000, undefined, NOW), NOW, 'never in the future');
-  assert.equal(phoneFixTs(undefined, undefined, NOW), NOW);
-  assert.equal(phoneFixTs(10 * LIMITS.maxAgeMs, undefined, NOW), NOW - LIMITS.maxAgeMs);
-  assert.equal(phoneFixTs(5000, NOW - 1000, NOW), NOW - 1000, 'never before the previous fix');
-  assert.ok(parsePing({ ...base, ts: phoneFixTs(10 * LIMITS.maxAgeMs, undefined, NOW) }, NOW).ok);
+  const fix = (fixAgeMs) => ({ lat: 1, lng: 2, fixAgeMs });
+  assert.equal(phoneFixTs(fix(5000), undefined, NOW), NOW - 5000);
+  assert.equal(phoneFixTs(fix(-5000), undefined, NOW), NOW, 'never in the future');
+  assert.equal(phoneFixTs(fix(undefined), undefined, NOW), NOW);
+  assert.equal(phoneFixTs(fix(10 * LIMITS.maxAgeMs), undefined, NOW), NOW - LIMITS.maxAgeMs);
+  assert.equal(phoneFixTs(fix(5000), NOW - 1000, NOW), NOW - 1000, 'never before the previous fix');
+  assert.ok(parsePing({ ...base, ts: phoneFixTs(fix(10 * LIMITS.maxAgeMs), undefined, NOW) }, NOW).ok);
 });

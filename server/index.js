@@ -255,9 +255,7 @@ async function driverPing(req, res) {
   const hasFix = typeof b.lat === 'number' && typeof b.lng === 'number';
   const lat = hasFix ? b.lat : (prev?.lat ?? CENTER.lat);
   const lng = hasFix ? b.lng : (prev?.lng ?? CENTER.lng);
-  // ts is when the GPS fix was taken. A ping without a fix (for example a passenger
-  // button tap) keeps the last fix time, so a quiet phone never looks fresh.
-  const ts = hasFix ? phoneFixTs(b.fixAgeMs, prev?.ts, now) : (prev?.ts ?? now);
+  const ts = phoneFixTs(b, prev?.ts, now);
   const result = fleet.ingest({ ...b, lat, lng, ts, vehicleId: d.taxiId }, 'driver-phone', now);
   if (!result.ok) return send(res, 400, { error: result.error });
   // No stats work here: the series samples on its own timer and stats go out every STATS_PUSH_MS.
