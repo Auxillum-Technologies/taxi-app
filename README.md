@@ -132,7 +132,7 @@ Key choices:
 ## Tests
 
 ```bash
-npm test     # store validation, out-of-order pings, alerts, playback; accounts, sign-in limits, messages, reports, persistence; trips, distance, slow zones, dashboard stats
+npm test     # store validation, out-of-order pings, alerts, playback; accounts, sign-in limits, messages, reports, persistence; trips, distance, slow zones, dashboard stats; driver pings and /api/driver/me against the running server
 ```
 
 ## Known limits
