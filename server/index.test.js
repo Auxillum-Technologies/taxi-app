@@ -6,7 +6,6 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import WebSocket from 'ws';
 
 // Runs the real server as a child process, the way a phone and the owner dashboard reach it.
 
@@ -84,22 +83,4 @@ test("the driver's own live row comes back from /api/driver/me", async () => {
   assert.equal(body.live.speed, 30);
   assert.ok(body.live.distanceKm > 0, `distance ${body.live.distanceKm}`);
   assert.equal(body.live.historyMinutes, 30);
-});
-
-test('a passenger pick-up reaches the owner dashboard at once, not on the next stats tick', async () => {
-  const { owner, driver } = await signIn();
-  await call('POST', '/api/driver/ping', driver, { lat: 7.08, lng: 125.62, speed: 10, heading: 0, onTrip: false });
-  const ws = new WebSocket(base.replace('http', 'ws') + '/ws');
-  const frames = [];
-  ws.on('message', (m) => frames.push(JSON.parse(m)));
-  await new Promise((resolve) => ws.on('open', resolve));
-  ws.send(JSON.stringify({ type: 'auth', token: owner }));
-  while (!frames.some((f) => f.type === 'stats')) await new Promise((r) => setTimeout(r, 20));
-  frames.length = 0;
-  await call('POST', '/api/driver/ping', driver, { lat: 7.08, lng: 125.62, speed: 10, heading: 0, onTrip: true });
-  const deadline = Date.now() + 1000;
-  const onTrip = () => frames.some((f) => f.type === 'stats' && f.data.vehicles.find((v) => v.id === 'ALAI-01')?.status === 'on_trip');
-  while (!onTrip() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
-  ws.close();
-  assert.ok(onTrip(), 'no stats frame with ALAI-01 on trip within 1 s');
 });

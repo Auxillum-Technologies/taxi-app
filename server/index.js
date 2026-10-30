@@ -272,7 +272,6 @@ async function driverPing(req, res) {
   }
   const now = Date.now();
   const prev = fleet.get(d.taxiId);
-  const wasOnTrip = activePhones.get(d.taxiId)?.onTrip;
   const lat = typeof b.lat === 'number' ? b.lat : (prev?.lat ?? CENTER.lat);
   const lng = typeof b.lng === 'number' ? b.lng : (prev?.lng ?? CENTER.lng);
   const ts = typeof b.ts === 'number' && (!prev || b.ts >= prev.ts) ? b.ts : now;
@@ -285,11 +284,7 @@ async function driverPing(req, res) {
     onTrip: result.value.onTrip,
     updatedAt: now,
   });
-  // Stats go out on their timer, not per ping. A passenger pick-up or drop-off is pushed at once
-  // so the dashboard shows it without waiting; that happens a few times an hour per taxi.
-  if (wasOnTrip !== undefined && wasOnTrip !== result.value.onTrip) {
-    broadcast('live', () => ({ type: 'stats', data: liveStats() }));
-  }
+  // No stats work here: the series samples on its own timer and stats go out every STATS_PUSH_MS.
   send(res, 202, { accepted: true, stale: Boolean(result.stale) });
 }
 
