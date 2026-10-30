@@ -291,7 +291,7 @@
       }
 
       function signedOut() {
-        stopSharing();
+        stopSharing(false);
         token = '';
         driver = null;
         writeStore(TOKEN_KEY, '');
@@ -301,6 +301,7 @@
       }
 
       $('signout').addEventListener('click', async () => {
+        stopSharing();
         await api('/api/driver/logout', { method: 'POST' }).catch(() => {});
         signedOut();
       });

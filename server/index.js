@@ -222,7 +222,7 @@ async function driverLogin(req, res) {
 }
 
 function driverLogout(req, res) {
-  desk.closeSession(bearer(req));
+  desk.signOutDriver(bearer(req));
   send(res, 200, { ok: true });
 }
 

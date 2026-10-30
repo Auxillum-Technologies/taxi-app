@@ -100,8 +100,8 @@ function checkPassword(p) {
   return null;
 }
 
-// onDriverOff(taxiId) runs when a driver stops reporting for a taxi: sign-out, session expiry,
-// PIN reset, removal, or a move to another taxi.
+// onDriverOff(taxiId) runs when a driver stops reporting for a taxi: sign-out, PIN reset, removal,
+// a move to another taxi, or expiry of the driver's last live session.
 export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS, onDriverOff = () => {} } = {}) {
   const drivers = new Map(); // id -> record incl. pinHash (never sent to clients)
   const messages = []; // { id, to: driverId | 'all', text, at, readBy: [driverId] }
@@ -181,25 +181,24 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS, 
     else f.count++;
   }
 
-  function dropSession(hash) {
+  // A session that ran out stops the taxi only when the driver has no other live session.
+  function expireSession(hash) {
     const s = sessions.get(hash);
-    if (!s || !sessions.delete(hash)) return false;
+    sessions.delete(hash);
     const d = s.role === 'driver' && drivers.get(s.driverId);
     const t = now();
-    const stillIn = [...sessions.values()].some((o) => o.driverId === s.driverId && o.expires >= t);
-    if (d && !stillIn) onDriverOff(d.taxiId);
-    return true;
+    if (d && ![...sessions.values()].some((o) => o.driverId === s.driverId && o.expires >= t)) onDriverOff(d.taxiId);
   }
 
   function pruneSessions() {
     const t = now();
-    for (const [hash, s] of sessions) if (s.expires < t) dropSession(hash);
+    for (const [hash, s] of sessions) if (s.expires < t) expireSession(hash);
   }
 
   // Ends every session that matches; saves when any ended.
   function endSessions(match) {
     let ended = false;
-    for (const [hash, s] of sessions) if (match(s) && dropSession(hash)) ended = true;
+    for (const [hash, s] of sessions) if (match(s) && sessions.delete(hash)) ended = true;
     if (ended) persist();
   }
 
@@ -217,7 +216,7 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS, 
     const s = sessions.get(hash);
     if (!s) return null;
     if (s.expires < now()) {
-      dropSession(hash);
+      expireSession(hash);
       persist();
       return null;
     }
@@ -225,7 +224,14 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS, 
   }
 
   function closeSession(token) {
-    if (typeof token === 'string' && token && dropSession(tokenHash(token))) persist();
+    if (typeof token === 'string' && token && sessions.delete(tokenHash(token))) persist();
+  }
+
+  // The driver signed out: the taxi stops sharing even when another of the driver's sessions is live.
+  function signOutDriver(token) {
+    const d = driverFor(token);
+    if (d) onDriverOff(d.taxiId);
+    closeSession(token);
   }
 
   // Returns the driver record for a valid driver session, or null (also after the driver was removed).
@@ -329,14 +335,15 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS, 
     const { taxi, error } = checkTaxi(input.taxi, { ...emptyTaxi(), ...d.taxi });
     if (error) return fail(error);
     let pinHash = d.pinHash;
-    if (input.pin !== undefined && input.pin !== '') {
+    const pinReset = input.pin !== undefined && input.pin !== '';
+    if (pinReset) {
       const pinErr = checkPin(input.pin);
       if (pinErr) return fail(pinErr);
       pinHash = await hashPassword(input.pin);
       endSessions((s) => s.driverId === id);
       nameFailures.delete(nameKey(d.name));
     }
-    if (taxiId !== d.taxiId) onDriverOff(d.taxiId);
+    if (pinReset || taxiId !== d.taxiId) onDriverOff(d.taxiId);
     Object.assign(d, { name, taxiId, taxi, pinHash });
     delete d.username; // records from before PIN sign-in
     delete d.passwordHash;
@@ -345,9 +352,11 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS, 
   }
 
   function removeDriver(id) {
-    if (!drivers.has(id)) return false;
-    endSessions((s) => s.driverId === id);
+    const d = drivers.get(id);
+    if (!d) return false;
     drivers.delete(id);
+    endSessions((s) => s.driverId === id);
+    onDriverOff(d.taxiId);
     changed();
     return true;
   }
@@ -520,6 +529,7 @@ export function createDesk({ file = null, now = Date.now, limits = DESK_LIMITS, 
     sessionFor,
     driverFor,
     closeSession,
+    signOutDriver,
     addDriver,
     updateDriver,
     removeDriver,
