@@ -368,3 +368,38 @@ test('a new owner password ends owner sessions saved before the restart', async 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a driver session the server ends stops that taxi sharing; the move to a new taxi stops the old one', async () => {
+  const c = clock();
+  const off = [];
+  const desk = await newDesk({ now: c.now, onDriverOff: (taxiId) => off.push(taxiId) });
+  const juan = await addDriver(desk);
+  const maria = await addDriver(desk, { name: 'Maria Santos', taxiId: 'TX-077', pin: '1234' });
+  const signIn = async (name, pin) => (await desk.driverLogin({ name, pin, key: 'k' })).value.token;
+
+  const juanToken = await signIn('Juan Dela Cruz', '482913');
+  await desk.updateDriver(juan.id, { taxi: { plate: 'NBC 5678' } });
+  assert.deepEqual(off, [], 'detail edits keep sharing');
+
+  await desk.updateDriver(juan.id, { pin: '7777' });
+  assert.deepEqual(off, ['TX-042'], 'PIN reset');
+
+  off.length = 0;
+  await desk.updateDriver(juan.id, { taxiId: 'TX-050' });
+  assert.deepEqual(off, ['TX-042'], 'taxi change stops the old taxi');
+
+  await signIn('Maria Santos', '1234');
+  assert.equal(desk.removeDriver(maria.id), true);
+  assert.equal(off.at(-1), 'TX-077', 'removal');
+
+  const again = await signIn('Juan Dela Cruz', '7777');
+  desk.closeSession(again);
+  assert.equal(off.at(-1), 'TX-050', 'sign-out');
+
+  const late = await signIn('Juan Dela Cruz', '7777');
+  off.length = 0;
+  c.tick(DESK_LIMITS.sessionMs + 1);
+  assert.equal(desk.driverFor(late), null);
+  assert.deepEqual(off, ['TX-050'], 'session expiry');
+  assert.equal(desk.driverFor(juanToken), null);
+});

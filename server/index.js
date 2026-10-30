@@ -30,7 +30,7 @@ const DEFAULT_DRIVERS = [
 ];
 
 const fleet = createFleet();
-const desk = createDesk({ file: DATA_FILE });
+const desk = createDesk({ file: DATA_FILE, onDriverOff: (taxiId) => fleet.stopSharing(taxiId) });
 const ownerPassword = OWNER_PASSWORD || DEFAULT_OWNER_PASSWORD;
 await desk.setOwnerPassword(ownerPassword);
 for (const d of DEFAULT_DRIVERS) {
@@ -222,8 +222,6 @@ async function driverLogin(req, res) {
 }
 
 function driverLogout(req, res) {
-  const d = desk.driverFor(bearer(req));
-  if (d) fleet.stopSharing(d.taxiId);
   desk.closeSession(bearer(req));
   send(res, 200, { ok: true });
 }
