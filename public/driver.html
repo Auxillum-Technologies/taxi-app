@@ -516,9 +516,11 @@
         $('mDist').textContent = `${tripKm.toFixed(2)} km`;
       }
 
-      // ts is when the GPS fix was taken, so the owner never sees an old position as fresh.
+      // fixAgeMs is how old the GPS fix is, both times on this phone's clock, so the owner never
+      // sees an old position as fresh even when the phone's clock is wrong.
       // Without a fix (a passenger tap before GPS answers) the server keeps the last fix time.
       function sendPingNow() {
+        if (watchId === null) return;
         lastSent = Date.now();
         const c = lastPos?.coords;
         const fixTs = c ? lastPos.timestamp : null;
@@ -531,7 +533,7 @@
           } : {}),
           onTrip,
           sharing: true,
-          ...(c ? { ts: fixTs } : {}),
+          ...(c ? { fixAgeMs: lastSent - fixTs } : {}),
         };
         if (c) {
           $('locState').textContent = 'Sharing';
@@ -552,6 +554,7 @@
       }
 
       function sendPosition(pos, force = false) {
+        if (watchId === null) return;
         const fresh = pos !== lastPos;
         if (onTrip && pos?.coords) {
           const cur = { lat: pos.coords.latitude, lng: pos.coords.longitude };

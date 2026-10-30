@@ -3,7 +3,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { createFleet, LIMITS } from './store.js';
+import { createFleet, LIMITS, phoneFixTs } from './store.js';
 import { createDesk, DESK_LIMITS, publicDriver, REPORT_TYPES } from './desk.js';
 import { startSimulator } from './simulator.js';
 import { createStats, STATS } from './stats.js';
@@ -257,7 +257,7 @@ async function driverPing(req, res) {
   const lng = hasFix ? b.lng : (prev?.lng ?? CENTER.lng);
   // ts is when the GPS fix was taken. A ping without a fix (for example a passenger
   // button tap) keeps the last fix time, so a quiet phone never looks fresh.
-  const ts = hasFix ? (typeof b.ts === 'number' ? b.ts : now) : (prev?.ts ?? now);
+  const ts = hasFix ? phoneFixTs(b.fixAgeMs, prev?.ts, now) : (prev?.ts ?? now);
   const result = fleet.ingest({ ...b, lat, lng, ts, vehicleId: d.taxiId }, 'driver-phone', now);
   if (!result.ok) return send(res, 400, { error: result.error });
   // No stats work here: the series samples on its own timer and stats go out every STATS_PUSH_MS.

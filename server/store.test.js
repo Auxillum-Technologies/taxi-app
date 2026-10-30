@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createFleet, parsePing, LIMITS } from './store.js';
+import { createFleet, parsePing, phoneFixTs, LIMITS } from './store.js';
 
 const NOW = 1_800_000_000_000;
 const base = { vehicleId: 'TX-1', lat: 40.75, lng: -73.98, speed: 30, heading: 90, ts: NOW, onTrip: true };
@@ -120,4 +120,29 @@ test('a stop starts again after a gap with no fixes', () => {
   const v = f.snapshot(later).vehicles[0];
   assert.equal(v.status, 'on_trip');
   assert.ok(!v.alerts.some((a) => a.type === 'idle'), 'time asleep does not count as stopped');
+});
+
+test('a phone with a wrong clock sending fresh fixes stays live, not asleep', () => {
+  const f = createFleet();
+  for (const skew of [-90_000, 90_000]) {
+    const id = `PH${skew}`;
+    for (let t = NOW; t <= NOW + 30_000; t += 3000) {
+      const deviceNow = t + skew;
+      const fixAgeMs = deviceNow - (deviceNow - 1000); // the fix is 1 s old on the phone's clock
+      const r = f.ingest({ ...base, vehicleId: id, ts: phoneFixTs(fixAgeMs, f.get(id)?.ts, t) }, 'driver-phone', t);
+      assert.equal(r.ok, true);
+      assert.equal(r.stale, undefined);
+    }
+    const v = f.snapshot(NOW + 30_000).vehicles.find((x) => x.id === id);
+    assert.equal(v.status, 'on_trip');
+  }
+});
+
+test('phoneFixTs keeps the fix age honest and in order', () => {
+  assert.equal(phoneFixTs(5000, undefined, NOW), NOW - 5000);
+  assert.equal(phoneFixTs(-5000, undefined, NOW), NOW, 'never in the future');
+  assert.equal(phoneFixTs(undefined, undefined, NOW), NOW);
+  assert.equal(phoneFixTs(10 * LIMITS.maxAgeMs, undefined, NOW), NOW - LIMITS.maxAgeMs);
+  assert.equal(phoneFixTs(5000, NOW - 1000, NOW), NOW - 1000, 'never before the previous fix');
+  assert.ok(parsePing({ ...base, ts: phoneFixTs(10 * LIMITS.maxAgeMs, undefined, NOW) }, NOW).ok);
 });

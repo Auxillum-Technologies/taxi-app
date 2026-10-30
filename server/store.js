@@ -47,6 +47,14 @@ export function parsePing(input, now = Date.now()) {
   return { ok: true, value: { vehicleId, lat, lng, speed, heading, ts, onTrip } };
 }
 
+// When a phone's GPS fix was taken, on the server clock. The phone sends the fix age measured
+// on its own clock, so a phone whose clock is wrong still reports honest freshness.
+// Never in the future, never older than maxAgeMs, never before the previous fix (so it is not dropped as out of order).
+export function phoneFixTs(fixAgeMs, prevTs, now = Date.now()) {
+  const age = isNum(fixAgeMs) ? Math.min(Math.max(fixAgeMs, 0), LIMITS.maxAgeMs) : 0;
+  return Math.max(now - age, prevTs ?? -Infinity);
+}
+
 function fail(error) {
   return { ok: false, error };
 }
