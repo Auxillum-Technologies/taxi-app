@@ -230,8 +230,6 @@
       const SIGN_IN = '/?as=driver';
       const MIN_GAP_MS = 3000;
       const REFRESH_MS = 15000; // live numbers; owner edits also arrive through the desk socket
-      const OFFLINE_RETRY_MS = 10000; // the server may be mid-deploy; keep trying without a tap
-      const SIGNED_OUT_ERROR = 'driver sign-in required'; // the server's 401 body for an ended session
       const STATUS_LABEL = { free: 'Free', on_trip: 'On trip', offline: 'Offline' };
 
       let token = readStore(TOKEN_KEY);
@@ -244,7 +242,6 @@
       let lastPos = null;
       let lastSent = 0;
       let refreshTimer = null;
-      let offlineTimer = null;
       const TRIPS_KEY = 'taxi.driverTrips';
       let onTrip = false;
       let tripStartMs = 0;
@@ -275,9 +272,7 @@
           keepalive: Boolean(opts.keepalive),
         });
         const data = await res.json().catch(() => ({}));
-        // Only the server saying the session ended signs the driver out. Network errors, 5xx and
-        // a 401 from anything in between (a proxy, a captive portal) keep the driver sharing.
-        if (res.status === 401 && token && data.error === SIGNED_OUT_ERROR) signedOut();
+        if (res.status === 401 && token) signedOut();
         return { ok: res.ok, status: res.status, data };
       }
 
@@ -533,7 +528,7 @@
             if (res.ok) {
               say(`Sending. Last update ${new Date(now).toLocaleTimeString()} · ${Math.round(body.speed || 0)} km/h`, 'ok');
               loadMe().catch(() => {});
-            } else if (token) {
+            } else if (res.status !== 401) {
               say(`Server refused the update: ${res.data.error || res.status}`, 'err');
             }
           })
@@ -676,7 +671,6 @@
 
       async function start() {
         if (!token) return location.replace(SIGN_IN);
-        clearTimeout(offlineTimer);
         $('offline').hidden = true;
         const res = await loadMe().catch(() => null);
         if (res && res.ok) {
@@ -686,10 +680,9 @@
           startSharing();
           clearInterval(refreshTimer);
           refreshTimer = setInterval(() => loadMe().catch(() => {}), REFRESH_MS);
-        } else if (token) {
-          $('offlineMsg').textContent = 'Could not reach the server. Trying again every few seconds. Check your mobile data.';
+        } else if (!res || res.status !== 401) {
+          $('offlineMsg').textContent = 'Could not reach the server. Check your mobile data, then try again.';
           $('offline').hidden = false;
-          offlineTimer = setTimeout(start, OFFLINE_RETRY_MS);
         }
       }
 

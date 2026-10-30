@@ -343,7 +343,7 @@ function requireOwner(req, res) {
 function requireDriver(req, res) {
   const d = desk.driverFor(bearer(req));
   if (d) return d;
-  send(res, 401, { error: 'driver sign-in required' }); // driver.html signs out on exactly this error
+  send(res, 401, { error: 'driver sign-in required' });
   return null;
 }
 

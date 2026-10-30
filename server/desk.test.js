@@ -131,6 +131,7 @@ test('a driver saved before PIN sign-in cannot sign in until the owner sets a PI
     assert.equal((await desk.driverLogin({ name: 'Pedro Reyes', pin: '1234', key: 'k' })).ok, false);
     assert.equal((await desk.updateDriver('old-1', { pin: '2468' })).ok, true);
     assert.equal((await desk.driverLogin({ name: 'Pedro Reyes', pin: '2468', key: 'k' })).ok, true);
+    desk.flush();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -261,6 +262,7 @@ test('state survives a restart when a data file is given', async () => {
     assert.equal(second.listDrivers()[0].taxi.plate, 'LAB 1234');
     assert.equal(second.inboxFor(d.id)[0].text, 'Back to base at 6');
     assert.equal((await second.driverLogin({ name: 'Juan Dela Cruz', pin: '482913', key: 'k' })).ok, true);
+    second.flush();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -336,6 +338,7 @@ test('expired sessions are pruned from the data file and do not come back', asyn
     assert.ok(second.sessionFor(fresh, 'owner'));
     c.tick(DESK_LIMITS.sessionMs);
     assert.equal(second.sessionFor(fresh, 'owner'), null, 'restored sessions still expire');
+    second.flush();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -360,6 +363,7 @@ test('a new owner password ends owner sessions saved before the restart', async 
     const after = createDesk({ file });
     await after.setOwnerPassword('owner-secret-2');
     assert.equal(after.sessionFor(owner, 'owner'), null, 'revocation is saved');
+    after.flush();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
