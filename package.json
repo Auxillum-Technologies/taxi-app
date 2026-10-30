@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Realtime 3D taxi fleet monitor: tracker + driver-phone ingest, simulated fleet for testing, 3D map.",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev:server": "node --watch server/index.js",
     "dev:client": "vite",

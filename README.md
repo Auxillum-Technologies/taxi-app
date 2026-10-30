@@ -31,6 +31,10 @@ Production, one process:
 npm run build && npm start   # serves the built UI and the API on :8787
 ```
 
+Deploy on Railway: `railway.json` sets the build, start command, and health check.
+Add a volume mounted at `/data` and set `DATA_FILE=/data/desk.json`, or desk data is lost on each deploy.
+Set `OWNER_PASSWORD`, `INGEST_TOKEN`, and `SIM_COUNT` in the Railway dashboard.
+
 ### Configuration (environment variables)
 
 | Variable | Default | Meaning |
