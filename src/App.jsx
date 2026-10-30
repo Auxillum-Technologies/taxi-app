@@ -27,6 +27,7 @@ const FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'free', label: 'Free' },
   { id: 'on_trip', label: 'On trip' },
+  { id: 'asleep', label: 'Phone asleep' },
   { id: 'offline', label: 'Offline' },
   { id: 'alerts', label: 'Alerts' },
 ];
@@ -220,7 +221,7 @@ export default function App({ token, onSignOut }) {
   }, [displayed, ready, replayMin, view]);
 
   const counts = useMemo(() => {
-    const c = { free: 0, on_trip: 0, offline: 0, alerts: 0 };
+    const c = { free: 0, on_trip: 0, asleep: 0, offline: 0, alerts: 0 };
     for (const v of live.vehicles) {
       c[v.status] = (c[v.status] || 0) + 1;
       if (v.alerts.length) c.alerts++;
@@ -387,7 +388,7 @@ export default function App({ token, onSignOut }) {
                 >
                   <span className="swatch" style={{ background: STATUS_HEX[v.status] }} aria-hidden="true" />
                   <span className="id">{v.id}</span>
-                  <span className="meta">{Math.round(v.speed)} km/h</span>
+                  <span className="meta">{v.status === 'asleep' ? `Asleep ${ago(v.ts)}` : `${Math.round(v.speed)} km/h`}</span>
                   {v.alerts.length > 0 ? <Icon name="warning" size={18} className="alert-text" /> : <span />}
                   <span className="sr-only">{STATUS_LABEL[v.status]}{v.alerts.length ? ', has alerts' : ''}</span>
                 </button>
@@ -410,7 +411,7 @@ export default function App({ token, onSignOut }) {
               <span className="swatch" style={{ background: STATUS_HEX[selected.status] }} aria-hidden="true" />
               {STATUS_LABEL[selected.status]} · {Math.round(selected.speed)} km/h · heading {Math.round(selected.heading)}°
             </p>
-            <p className="muted small">Source: {selected.source} · updated {ago(selected.ts)}</p>
+            <p className="muted small">Source: {selected.source} · {selected.status === 'asleep' ? 'last GPS fix' : 'updated'} {ago(selected.ts)}</p>
             {selected.alerts.length > 0 ? (
               <ul className="alerts">
                 {selected.alerts.map((a) => (

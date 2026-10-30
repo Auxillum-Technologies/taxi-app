@@ -112,11 +112,15 @@
       .badge { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; font-size: 0.8rem; font-weight: 600; vertical-align: 1px; }
       .badge.bad { background: #fde8e8; color: #b91c1c; }
       .badge.warn { background: #fdf3d8; color: #8a5a00; }
-      .pill { display: inline-flex; align-items: center; gap: 6px; }
-      .pill::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: #94a3b8; }
+      .pill { display: inline-flex; align-items: flex-start; gap: 6px; }
+      .pill::before { content: ""; flex: none; width: 9px; height: 9px; margin-top: calc(0.6em - 4.5px); border-radius: 50%; background: #94a3b8; }
       .pill.free::before { background: #15803d; }
       .pill.on_trip::before { background: #f59e0b; }
+      .pill.asleep::before { background: #4f46e5; }
       .note { font-size: 0.85rem; }
+      .gps-warn { position: sticky; top: 8px; z-index: 2; border: 2px solid #b45309; background: #fff7e6; }
+      .gps-warn h2 { color: #7c2d12; }
+      .gps-warn p { color: #5c3a0a; }
       :focus-visible { outline: 2px solid #166534; outline-offset: 2px; }
       [hidden] { display: none !important; }
     </style>
@@ -138,6 +142,13 @@
           </div>
           <button type="button" class="ghost" id="signout">Sign out</button>
         </div>
+
+        <!-- Shown when sharing is off or GPS has gone quiet, for example after the screen locked. -->
+        <section id="gpsWarn" class="gps-warn" role="alert" aria-labelledby="gpsWarn-h" hidden>
+          <h2 id="gpsWarn-h"></h2>
+          <p id="gpsWarnMsg"></p>
+          <button id="gpsResume" class="primary" type="button">Resume sharing</button>
+        </section>
 
         <section aria-labelledby="profile-h">
           <h2 id="profile-h">My profile</h2>
@@ -230,7 +241,8 @@
       const SIGN_IN = '/?as=driver';
       const MIN_GAP_MS = 3000;
       const REFRESH_MS = 15000; // live numbers; owner edits also arrive through the desk socket
-      const STATUS_LABEL = { free: 'Free', on_trip: 'On trip', offline: 'Offline' };
+      const GPS_STALE_MS = 60000; // matches the server: after this the owner sees "Phone asleep"
+      const STATUS_LABEL = { free: 'Free', on_trip: 'On trip', asleep: 'Phone asleep', offline: 'Offline' };
 
       let token = readStore(TOKEN_KEY);
       let driver = null;
@@ -241,6 +253,8 @@
       let webLockRelease = null;
       let lastPos = null;
       let lastSent = 0;
+      let sharingSince = 0;
+      let gpsCheckTimer = null;
       let refreshTimer = null;
       const TRIPS_KEY = 'taxi.driverTrips';
       let onTrip = false;
@@ -502,10 +516,12 @@
         $('mDist').textContent = `${tripKm.toFixed(2)} km`;
       }
 
+      // ts is when the GPS fix was taken, so the owner never sees an old position as fresh.
+      // Without a fix (a passenger tap before GPS answers) the server keeps the last fix time.
       function sendPingNow() {
-        const now = Date.now();
-        lastSent = now;
+        lastSent = Date.now();
         const c = lastPos?.coords;
+        const fixTs = c ? lastPos.timestamp : null;
         const body = {
           ...(c ? {
             lat: c.latitude,
@@ -515,18 +531,18 @@
           } : {}),
           onTrip,
           sharing: true,
-          ts: now,
+          ...(c ? { ts: fixTs } : {}),
         };
         if (c) {
           $('locState').textContent = 'Sharing';
           $('locCoords').textContent = `${c.latitude.toFixed(5)}, ${c.longitude.toFixed(5)}`;
           $('locSpeed').textContent = `${Math.round(body.speed || 0)} km/h`;
-          $('locTime').textContent = new Date(now).toLocaleTimeString();
+          $('locTime').textContent = new Date(fixTs).toLocaleTimeString();
         }
         api('/api/driver/ping', { method: 'POST', body, keepalive: true })
           .then((res) => {
             if (res.ok) {
-              say(`Sending. Last update ${new Date(now).toLocaleTimeString()} · ${Math.round(body.speed || 0)} km/h`, 'ok');
+              if (c) say(`Sending. Last GPS fix ${new Date(fixTs).toLocaleTimeString()} · ${Math.round(body.speed || 0)} km/h`, 'ok');
               loadMe().catch(() => {});
             } else if (res.status !== 401) {
               say(`Server refused the update: ${res.data.error || res.status}`, 'err');
@@ -536,6 +552,7 @@
       }
 
       function sendPosition(pos, force = false) {
+        const fresh = pos !== lastPos;
         if (onTrip && pos?.coords) {
           const cur = { lat: pos.coords.latitude, lng: pos.coords.longitude };
           if (tripLastCoord) {
@@ -546,6 +563,7 @@
           updateTripMeter();
         }
         lastPos = pos;
+        if (fresh) checkGps();
         const now = Date.now();
         if (!force && now - lastSent < MIN_GAP_MS) return;
         sendPingNow();
@@ -564,6 +582,40 @@
         $('go').setAttribute('aria-pressed', 'false');
         $('locState').textContent = 'Stopped';
         say('Not sharing.');
+        checkGps();
+      }
+
+      // Warns the driver when the owner can no longer see the taxi: sharing is off, or no GPS
+      // fix arrived for a minute (screen locked, app in the background, GPS lost).
+      function checkGps() {
+        let title = '';
+        let msg = '';
+        if (watchId === null) {
+          title = 'Location sharing is off';
+          msg = 'The owner cannot see your taxi on the map.';
+        } else {
+          const lastFix = Math.max(lastPos?.timestamp ?? 0, sharingSince); // a resume gets a fresh minute
+          const quietMs = Date.now() - lastFix;
+          if (quietMs > GPS_STALE_MS) {
+            const min = Math.max(1, Math.floor(quietMs / 60000));
+            title = lastPos ? `GPS has not updated for ${min} min` : 'Waiting for GPS';
+            msg = 'The owner sees your taxi as "Phone asleep". Keep this page open with the screen on while you drive.';
+          }
+        }
+        $('gpsWarn').hidden = !title;
+        $('gpsWarn-h').textContent = title;
+        $('gpsWarnMsg').textContent = msg;
+      }
+
+      // One tap: start a fresh GPS watch and ask for a fix right away.
+      function resumeSharing() {
+        if (watchId !== null) stopSharing(false);
+        startSharing();
+        navigator.geolocation?.getCurrentPosition(
+          (pos) => sendPosition(pos, true),
+          () => {},
+          { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 },
+        );
       }
 
       // Sharing starts as soon as the driver's page opens; the button stops it and starts it again.
@@ -574,10 +626,17 @@
         $('go').setAttribute('aria-pressed', 'true');
         $('locState').textContent = 'Waiting for GPS';
         say('Waiting for GPS…');
+        sharingSince = Date.now();
         holdWakeLock();
+        clearInterval(gpsCheckTimer);
+        gpsCheckTimer = setInterval(checkGps, 5000);
+        checkGps();
         watchId = navigator.geolocation.watchPosition(
           (pos) => sendPosition(pos, false),
-          (err) => say(`Location error: ${err.message}. Check the browser's location permission.`, 'err'),
+          (err) => {
+            if (err.code === err.PERMISSION_DENIED) stopSharing(); // shows the "sharing is off" warning
+            say(`Location error: ${err.message}. Check the browser's location permission.`, 'err');
+          },
           { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 },
         );
         clearInterval(heartbeatTimer);
@@ -592,6 +651,7 @@
       }
 
       document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') checkGps(); // timers were paused in the background
         if (watchId === null) return;
         if (document.visibilityState === 'visible') {
           holdWakeLock();
@@ -661,6 +721,8 @@
           }
         }
       });
+
+      $('gpsResume').addEventListener('click', resumeSharing);
 
       $('go').addEventListener('click', () => {
         if (watchId !== null) return stopSharing();

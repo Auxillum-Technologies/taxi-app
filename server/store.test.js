@@ -58,7 +58,7 @@ test('speeding and idle-on-trip alerts fire', () => {
   assert.ok(v.alerts.some((a) => a.type === 'speeding'));
 
   const g = createFleet();
-  g.ingest({ ...base, speed: 0, ts: NOW - LIMITS.idleAlertMs - 1000 }, 'tracker', NOW - LIMITS.idleAlertMs - 1000);
+  for (let t = NOW - LIMITS.idleAlertMs - 1000; t <= NOW; t += 30_000) g.ingest({ ...base, speed: 0, ts: t }, 'tracker', t);
   g.ingest({ ...base, speed: 0, ts: NOW }, 'tracker', NOW);
   v = g.snapshot(NOW).vehicles[0];
   assert.ok(v.alerts.some((a) => a.type === 'idle'), 'idle alert on trip');
@@ -79,4 +79,45 @@ test('history is bounded by the playback window', () => {
   f.ingest({ ...base, ts: NOW - LIMITS.historyMs - 60_000 }, 'tracker', NOW - LIMITS.historyMs - 60_000);
   f.ingest({ ...base, ts: NOW }, 'tracker', NOW);
   assert.equal(f.snapshotAt(NOW - LIMITS.historyMs - 60_000).vehicles.length, 0, 'old sample trimmed');
+});
+
+test('a sharing phone that goes quiet shows as asleep with its real last fix time', () => {
+  const f = createFleet();
+  f.ingest({ ...base, speed: 0 }, 'driver-phone', NOW);
+  const later = NOW + LIMITS.idleAlertMs + 60_000;
+  const v = f.snapshot(later).vehicles[0];
+  assert.equal(v.status, 'asleep');
+  assert.equal(v.ts, NOW, 'last fix time is kept, not refreshed');
+  assert.deepEqual(v.alerts, [{ type: 'asleep', text: 'Phone asleep, last fix 6 min ago' }], 'no false stop alert from stale data');
+  assert.equal(f.vehicleStats(later)[0].idleMin, 0);
+});
+
+test('a phone that stopped sharing, or a quiet tracker, shows as offline', () => {
+  const f = createFleet();
+  f.ingest(base, 'driver-phone', NOW);
+  f.ingest({ ...base, vehicleId: 'TX-2' }, 'tracker', NOW);
+  f.stopSharing('TX-1');
+  const byId = Object.fromEntries(f.snapshot(NOW + LIMITS.offlineMs + 1000).vehicles.map((v) => [v.id, v]));
+  assert.equal(byId['TX-1'].status, 'offline');
+  assert.equal(byId['TX-2'].status, 'offline');
+  assert.equal(byId['TX-1'].alerts[0].type, 'offline');
+});
+
+test('the simulator does not take over a sleeping phone', () => {
+  const f = createFleet();
+  f.ingest(base, 'driver-phone', NOW);
+  const later = NOW + 5 * 60_000;
+  const r = f.ingest({ ...base, lat: 1, ts: later }, 'sim', later);
+  assert.equal(r.stale, true);
+  assert.equal(f.snapshot(later).vehicles[0].status, 'asleep');
+});
+
+test('a stop starts again after a gap with no fixes', () => {
+  const f = createFleet();
+  f.ingest({ ...base, speed: 0 }, 'driver-phone', NOW);
+  const later = NOW + 10 * 60_000;
+  f.ingest({ ...base, speed: 0, ts: later }, 'driver-phone', later);
+  const v = f.snapshot(later).vehicles[0];
+  assert.equal(v.status, 'on_trip');
+  assert.ok(!v.alerts.some((a) => a.type === 'idle'), 'time asleep does not count as stopped');
 });

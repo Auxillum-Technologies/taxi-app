@@ -4,7 +4,7 @@
 export const LIMITS = {
   speedLimitKmh: 90, // speeding alert above this
   idleAlertMs: 5 * 60_000, // on-trip vehicle stationary this long
-  offlineMs: 60_000, // no ping this long => offline
+  offlineMs: 60_000, // no ping this long => offline, or asleep for a phone that is still sharing
   forgetMs: 30 * 60_000, // drop vehicles unseen this long
   historyMs: 30 * 60_000, // playback window
   maxSamples: 2000, // hard cap per vehicle history
@@ -61,8 +61,9 @@ export function createFleet({ limits = LIMITS } = {}) {
     const p = parsed.value;
     const prev = vehicles.get(p.vehicleId);
 
-    // A live tracker or driver phone overrides the simulator for the same taxi ID.
-    if (source === 'sim' && prev && prev.source !== 'sim' && now - prev.ts <= limits.offlineMs) {
+    // A live tracker or driver phone overrides the simulator for the same taxi ID,
+    // including a sharing phone that has gone quiet: the owner must see it asleep, not simulated.
+    if (source === 'sim' && prev && prev.source !== 'sim' && (prev.sharing || now - prev.ts <= limits.offlineMs)) {
       return { ok: true, value: prev, stale: true };
     }
 
@@ -70,7 +71,9 @@ export function createFleet({ limits = LIMITS } = {}) {
     if (prev && p.ts < prev.ts) return { ok: true, value: prev, stale: true };
 
     const stationary = p.speed < 1;
-    const stoppedSince = stationary ? (prev?.stoppedSince ?? p.ts) : null;
+    // After a gap with no fixes, nothing is known about the stop, so it starts again.
+    const gap = prev && p.ts - prev.ts > limits.offlineMs;
+    const stoppedSince = stationary ? ((!gap && prev?.stoppedSince) || p.ts) : null;
     const last = prev?.history.at(-1);
     const v = {
       id: p.vehicleId,
@@ -81,6 +84,7 @@ export function createFleet({ limits = LIMITS } = {}) {
       onTrip: p.onTrip,
       ts: p.ts,
       source,
+      sharing: source === 'driver-phone', // until the phone says it stopped
       stoppedSince,
       history: prev?.history ?? [],
       tripStarts: prev?.tripStarts ?? [], // ms of each free -> on-trip change, last 24 h
@@ -101,18 +105,33 @@ export function createFleet({ limits = LIMITS } = {}) {
     return { ok: true, value: v };
   }
 
-  // Derived status and alerts for the live view.
+  // The driver's phone stopped sharing on purpose (button or sign-out).
+  function stopSharing(id) {
+    const v = vehicles.get(id);
+    if (!v || !v.sharing) return;
+    v.sharing = false;
+    version++;
+  }
+
+  // Derived status and alerts for the live view. A quiet vehicle is 'asleep' when it is a
+  // phone that never said it stopped sharing (screen locked, app in background), else 'offline'.
+  // Speed and stop alerts need fresh data, so neither fires for a quiet vehicle.
   function describe(v, now) {
-    const offline = now - v.ts > limits.offlineMs;
+    const quiet = now - v.ts > limits.offlineMs;
+    const asleep = quiet && v.sharing;
     const alerts = [];
-    if (offline) alerts.push({ type: 'offline', text: `No signal for ${Math.round((now - v.ts) / 1000)}s` });
-    if (!offline && v.speed > limits.speedLimitKmh) {
+    if (asleep) {
+      alerts.push({ type: 'asleep', text: `Phone asleep, last fix ${Math.max(1, Math.round((now - v.ts) / 60_000))} min ago` });
+    } else if (quiet) {
+      alerts.push({ type: 'offline', text: `No signal for ${Math.round((now - v.ts) / 1000)}s` });
+    }
+    if (!quiet && v.speed > limits.speedLimitKmh) {
       alerts.push({ type: 'speeding', text: `${Math.round(v.speed)} km/h` });
     }
-    if (!offline && v.onTrip && v.stoppedSince && now - v.stoppedSince > limits.idleAlertMs) {
+    if (!quiet && v.onTrip && v.stoppedSince && now - v.stoppedSince > limits.idleAlertMs) {
       alerts.push({ type: 'idle', text: `Stopped on trip for ${Math.round((now - v.stoppedSince) / 60_000)} min` });
     }
-    const status = offline ? 'offline' : v.onTrip ? 'on_trip' : 'free';
+    const status = asleep ? 'asleep' : quiet ? 'offline' : v.onTrip ? 'on_trip' : 'free';
     return {
       id: v.id,
       lat: v.lat,
@@ -196,7 +215,7 @@ export function createFleet({ limits = LIMITS } = {}) {
       alerts: d.alerts.map((a) => a.type),
       distanceKm: round(v.distanceKm, 2),
       trips: v.tripStarts.length,
-      idleMin: v.stoppedSince && d.status !== 'offline' ? Math.floor((now - v.stoppedSince) / 60_000) : 0,
+      idleMin: v.stoppedSince && (d.status === 'free' || d.status === 'on_trip') ? Math.floor((now - v.stoppedSince) / 60_000) : 0,
       ts: v.ts,
     };
   }
@@ -248,6 +267,7 @@ export function createFleet({ limits = LIMITS } = {}) {
 
   return {
     ingest,
+    stopSharing,
     get,
     tripsSince,
     vehicleStats,

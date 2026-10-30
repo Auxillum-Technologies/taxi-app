@@ -160,3 +160,15 @@ test("vehicleStat returns one taxi's dashboard row, and null once it is forgotte
   assert.equal(fleet.vehicleStat('NOPE', now), null);
   assert.equal(fleet.vehicleStat('TX-1', now + LIMITS.forgetMs + 20_000), null);
 });
+
+test('a sleeping phone counts as asleep, not online, offline or moving', () => {
+  const fleet = createFleet();
+  fleet.ingest({ vehicleId: 'PH-1', lat: 7.19, lng: 125.45, speed: 40, heading: 0, ts: T0, onTrip: true }, 'driver-phone', T0);
+  feed(fleet, 'TX-1', 0, { speed: 30 });
+  const t = T0 + LIMITS.offlineMs + 1000;
+  const k = createStats(fleet, { now: () => t }).summary().kpis;
+  assert.equal(k.asleep, 1);
+  assert.equal(k.offline, 1);
+  assert.equal(k.online, 0);
+  assert.equal(k.moving, 0);
+});

@@ -8,6 +8,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 export const STATUS_COLOR = {
   free: 0x15803d,
   on_trip: 0xf59e0b,
+  asleep: 0x4f46e5,
   offline: 0x94a3b8,
 };
 const ALERT_COLOR = 0xdc2626;
